@@ -7,3 +7,4 @@ python-dotenv==1.0.1
 scipy==1.15.2
 scikit-learn==1.6.1
 numba==0.61.2
+xgboost==3.0.3

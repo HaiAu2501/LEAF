@@ -1,0 +1,14 @@
+defaults:
+  - _self_
+
+llm:
+  model: gpt-4o-mini
+  temperature: 1
+
+tree:
+  max_depth: 5
+  n_estimators: 100
+  n_samples: 120
+
+paths:
+  project_root: .
