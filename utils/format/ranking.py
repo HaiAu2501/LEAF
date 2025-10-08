@@ -1,6 +1,6 @@
 from pydantic import BaseModel
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 
 class Ranking(BaseModel):
-    scores: List[int]
+    scores: Dict[str, float]
     

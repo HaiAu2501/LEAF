@@ -6,3 +6,6 @@ bin/
 env/
 benchmarks/
 *.ipynb
+*.c
+*.cpp
+outputs/
