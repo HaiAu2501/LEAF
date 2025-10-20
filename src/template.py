@@ -20,5 +20,5 @@ class Algorithm(ABC):
         ...
 
     @abstractmethod
-    def predict(self, test: np.ndarray) -> np.ndarray:
+    def predict(self, X_test: np.ndarray) -> np.ndarray:
         ...

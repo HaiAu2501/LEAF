@@ -16,6 +16,7 @@ evaluator:
   n_data_splits: 5
   n_alg_runs: 3
   random_state: 0
+  verbose: True
 
 alg:
   param_grid:

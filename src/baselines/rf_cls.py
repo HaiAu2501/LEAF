@@ -9,7 +9,6 @@ class CustomRFClassifier(Algorithm):
     """
     Custom Random Forest Classifier with optional hyperparameter tuning using GridSearchCV.
     """
-
     def __init__(self,
         param_grid: dict[str, list] = None,
         use_oob: bool = False,
@@ -23,7 +22,7 @@ class CustomRFClassifier(Algorithm):
 
     def fit(self, train: tuple, val: tuple, seed: int) -> None:
         X_train, y_train = train
-        if self.param_grid and self.use_oob:
+        if self.use_oob:
             # Hyperparameter tuning with OOB score
             best_params, best_score = None, -np.inf
             for params in ParameterGrid(self.param_grid):
@@ -43,7 +42,7 @@ class CustomRFClassifier(Algorithm):
                 **best_params
             )
             self.model.fit(X_train, y_train)
-        elif self.param_grid:
+        else:
             # Classic GridSearchCV (without OOB)
             X_val, y_val = val
             X_all = np.concatenate([X_train, X_val])
@@ -64,5 +63,5 @@ class CustomRFClassifier(Algorithm):
             )
             self.model.fit(X_all, y_all)
 
-    def predict(self, test) -> np.ndarray:
-        return self.model.predict(test)
+    def predict(self, X_test: np.ndarray) -> np.ndarray:
+        return self.model.predict(X_test)

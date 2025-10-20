@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 
+from numpy import ndarray
 from pandas import DataFrame, Series
 from sklearn.datasets import fetch_openml
 from sklearn.impute import SimpleImputer
@@ -31,7 +32,7 @@ DATASET_IDS = {
 }
 
 
-def impute(X: pd.DataFrame, cat_feats: list[str], num_feats: list[str]) -> pd.DataFrame:
+def impute(X: DataFrame, cat_feats: list[str], num_feats: list[str]) -> DataFrame:
     X = X.copy()
     if len(cat_feats) > 0:
         cat_imputer = SimpleImputer(strategy="most_frequent")
@@ -41,7 +42,7 @@ def impute(X: pd.DataFrame, cat_feats: list[str], num_feats: list[str]) -> pd.Da
         X[num_feats] = num_imputer.fit_transform(X[num_feats])
     return X
 
-def sort_cat_feats(X_train: pd.DataFrame, y_train: np.ndarray, cat_feats: list[str]) -> list[str]:
+def sort_cat_feats(X_train: DataFrame, y_train: ndarray, cat_feats: list[str]) -> list[str]:
     sorted_cat_feats = []
     df_combined = X_train.copy()
     df_combined["target"] = y_train
@@ -127,7 +128,7 @@ def fetch_data(dataset_name: str, ratio: list[float], verbose: bool = False):
 
     if task_type == "classification":
         data_descriptions += "LABEL DISTRIBUTION:\n"
-        label_counts = pd.Series(y_train).value_counts()
+        label_counts = y_train.value_counts()
         total_count = len(y_train)
         for label, count in label_counts.items():
             data_descriptions += f"- {label}: {count / total_count:.2%}\n"
@@ -147,3 +148,50 @@ def fetch_data(dataset_name: str, ratio: list[float], verbose: bool = False):
     }
 
     return data
+
+def preprocess_data(
+        X_train: DataFrame,
+        y_train: Series,
+        X_val: DataFrame,
+        y_val: Series,
+        X_test: DataFrame,
+        y_test: Series,
+        cat_feats: list[str],
+        task_type: str
+    ) -> tuple[DataFrame, ndarray, DataFrame, ndarray, DataFrame, ndarray]:
+
+    assert (
+        isinstance(X_train, DataFrame) 
+        and isinstance(X_val, DataFrame) 
+        and isinstance(X_test, DataFrame)
+    ), "X inputs must be DataFrames"
+    assert (
+        isinstance(y_train, Series) 
+        and isinstance(y_val, Series) 
+        and isinstance(y_test, Series)
+    ), "y inputs must be Series"
+
+    # STEP 4: Encode/scale target variable
+    if task_type == "classification":
+        target_encoder = LabelEncoder()    
+        y_train = target_encoder.fit_transform(y_train)
+        y_val = target_encoder.transform(y_val)
+        y_test = target_encoder.transform(y_test)
+    elif task_type == "regression":
+        y_train = y_train.astype(float).to_numpy().reshape(-1, 1)
+        y_val = y_val.astype(float).to_numpy().reshape(-1, 1)
+        y_test = y_test.astype(float).to_numpy().reshape(-1, 1)
+        target_scaler = StandardScaler()
+        y_train = target_scaler.fit_transform(y_train)
+        y_val = target_scaler.transform(y_val)
+        y_test = target_scaler.transform(y_test)
+
+    # STEP 5: Encode categorical features
+    if len(cat_feats) > 0:
+        sorted_cat_feats = sort_cat_feats(X_train, y_train, cat_feats)
+        ordinal_encoder = OrdinalEncoder(categories=sorted_cat_feats, handle_unknown="use_encoded_value", unknown_value=-1)
+        X_train[cat_feats] = ordinal_encoder.fit_transform(X_train[cat_feats].astype(str))
+        X_val[cat_feats] = ordinal_encoder.transform(X_val[cat_feats].astype(str))
+        X_test[cat_feats] = ordinal_encoder.transform(X_test[cat_feats].astype(str))
+
+    return X_train, y_train, X_val, y_val, X_test, y_test

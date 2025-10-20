@@ -1,6 +1,6 @@
 import numpy as np
 from sklearn.model_selection import train_test_split
-from utils.preprocess import fetch_data
+from utils.preprocess import fetch_data, preprocess_data
 
 class Dataset():
     def __init__(self, name: str, ratio: list[float] = [0.2, 0.4, 0.4], verbose: bool = False):
@@ -38,6 +38,7 @@ class Dataset():
 
     def split(self, seed: int = 0):
         X_train, y_train = self.train
+        X_test, y_test = self.test
         val_size = self.ratio[1] / (self.ratio[0] + self.ratio[1])
 
         X_train, X_val, y_train, y_val = train_test_split(
@@ -47,5 +48,13 @@ class Dataset():
             stratify=y_train if self.task_type == "classification" else None
         )
 
-        return (X_train, y_train), (X_val, y_val)
+        X_train, y_train, X_val, y_val, X_test, y_test = preprocess_data(
+            X_train, y_train,
+            X_val, y_val,
+            X_test, y_test,
+            self.cat_feats,
+            self.task_type
+        )
+
+        return (X_train, y_train), (X_val, y_val), (X_test, y_test)
 

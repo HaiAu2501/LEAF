@@ -13,13 +13,15 @@ class Evaluator():
         dataset: Dataset,
         n_data_splits: int,
         n_alg_runs: int,
-        random_state: int = 0
+        random_state: int = 0,
+        verbose: bool = False
     ):
         self.alg = alg
         self.dataset = dataset
         self.n_data_splits = n_data_splits
         self.n_alg_runs = n_alg_runs
         self.random_state = random_state
+        self.verbose = verbose
         
         assert alg.task_type == dataset.task_type, "Algorithm and Dataset task types do not match."
 
@@ -32,15 +34,18 @@ class Evaluator():
             for j in range(self.n_alg_runs):
                 score = self._evaluate(i, j)
                 scores.append(score)
+                if self.verbose: print(f"Split {i} | Run {j} | Score: {score:.2f}")
         return np.mean(scores), np.std(scores)
 
     def _evaluate(self, data_split: int, alg_run: int) -> float:
-        train, val = self.dataset.split(seed=self.random_state + data_split)
-        test = self.dataset.test
+        train, val, test = self.dataset.split(seed=self.random_state + data_split)
         self.alg.fit(train, val, seed=self.random_state + alg_run)
-        preds = self.alg.predict(test[0])
+        
+        # Evaluate
+        X_test, y_test = test
+        y_pred = self.alg.predict(X_test)
         if self.task_type == "regression":
-            return root_mean_squared_error(test[1], preds)
+            return root_mean_squared_error(y_test, y_pred)
         elif self.task_type == "classification":
-            return balanced_accuracy_score(test[1], preds)
+            return balanced_accuracy_score(y_test, y_pred)
             
