@@ -16,7 +16,7 @@ class Algorithm(ABC):
         self.param_grid = param_grid
 
     @abstractmethod
-    def fit(self, train: Tuple[np.ndarray, np.ndarray], val: Tuple[np.ndarray, np.ndarray]) -> None:
+    def fit(self, train: Tuple[np.ndarray, np.ndarray], val: Tuple[np.ndarray, np.ndarray], seed: int) -> None:
         ...
 
     @abstractmethod

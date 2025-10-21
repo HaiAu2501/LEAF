@@ -1,6 +1,5 @@
 import numpy as np
 
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import balanced_accuracy_score, root_mean_squared_error
 
 from src.template import Algorithm
@@ -34,7 +33,7 @@ class Evaluator():
             for j in range(self.n_alg_runs):
                 score = self._evaluate(i, j)
                 scores.append(score)
-                if self.verbose: print(f"Split {i} | Run {j} | Score: {score:.2f}")
+                if self.verbose: print(f"Split {i} | Run {j} | Score: {score:.4f}")
         return np.mean(scores), np.std(scores)
 
     def _evaluate(self, data_split: int, alg_run: int) -> float:

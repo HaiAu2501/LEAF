@@ -1,6 +1,5 @@
 import hydra
 import numpy as np
-
 from dotenv import load_dotenv
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
@@ -16,8 +15,7 @@ OmegaConf.register_new_resolver("logscale", lambda start, end, num: np.logspace(
 
 @hydra.main(version_base=None, config_path="cfg", config_name="config")
 def main(cfg: DictConfig):
-    print("Experiment Configuration:")
-    # print(cfg)
+    # print(f"Experiment Configuration: {cfg}")
     
     alg: Algorithm = instantiate(cfg.alg)
     # print(alg.param_grid)
@@ -35,7 +33,7 @@ def main(cfg: DictConfig):
     )
 
     mean_score, std_score = evaluator.run()
-    print(f"Mean Score: {mean_score:.2f}, Std Dev: {std_score:.2f}")
+    print(f"Mean Score: {mean_score:.4f}, Std Dev: {std_score:.4f}")
 
 if __name__ == "__main__":
     main()

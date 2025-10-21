@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 
 from omegaconf import OmegaConf
 from sklearn.ensemble import RandomForestClassifier
@@ -17,10 +18,12 @@ class CustomRFClassifier(Algorithm):
             task_type="classification",
             param_grid=param_grid,
         )
+        self.model = None
         self.use_oob = use_oob
         self.param_grid = OmegaConf.to_container(self.param_grid, resolve=True)
 
     def fit(self, train: tuple, val: tuple, seed: int) -> None:
+        self.model = None
         X_train, y_train = train
         if self.use_oob:
             # Hyperparameter tuning with OOB score
@@ -45,7 +48,7 @@ class CustomRFClassifier(Algorithm):
         else:
             # Classic GridSearchCV (without OOB)
             X_val, y_val = val
-            X_all = np.concatenate([X_train, X_val])
+            X_all = pd.concat([X_train, X_val], ignore_index=True)
             y_all = np.concatenate([y_train, y_val])
 
             n_train = len(X_train)
@@ -55,11 +58,13 @@ class CustomRFClassifier(Algorithm):
             val_idx = np.arange(n_train, n_train + n_val)
 
             self.model = GridSearchCV(
-                RandomForestClassifier(random_state=seed),
+                RandomForestClassifier(
+                    random_state=seed,
+                    class_weight="balanced"
+                ),
                 self.param_grid,
                 cv=[(train_idx, val_idx)],
                 n_jobs=-1,
-                refit=True
             )
             self.model.fit(X_all, y_all)
 

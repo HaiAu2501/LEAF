@@ -39,6 +39,8 @@ class Dataset():
     def split(self, seed: int = 0):
         X_train, y_train = self.train
         X_test, y_test = self.test
+        X_test = X_test.copy(deep=True)
+        y_test = y_test.copy(deep=True)
         val_size = self.ratio[1] / (self.ratio[0] + self.ratio[1])
 
         X_train, X_val, y_train, y_val = train_test_split(

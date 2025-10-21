@@ -10,7 +10,7 @@ llm:
 dataset:
   _target_: utils.loader.Dataset
   name: credit-g
-  ratio: [0.2, 0.4, 0.4] # train, val, test
+  ratio: [0.4, 0.4, 0.2] # train, val, test
 
 evaluator:
   n_data_splits: 5
@@ -20,7 +20,7 @@ evaluator:
 
 alg:
   param_grid:
-    n_estimators: [100] # fixed for fair comparison
+    n_estimators: [50] # fixed for fair comparison
     max_depth: [3] # fixed for fair comparison
 
 paths:
