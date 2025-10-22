@@ -10,8 +10,18 @@ from utils.loader import Dataset
 
 load_dotenv()
 
-OmegaConf.register_new_resolver("range", lambda start, end: range(int(start), int(end)))
-OmegaConf.register_new_resolver("logscale", lambda start, end, num: np.logspace(np.log10(float(start)), np.log10(float(end)), int(num)))
+OmegaConf.register_new_resolver(
+    "range",
+    lambda start, end: range(int(start), int(end))
+)
+OmegaConf.register_new_resolver(
+    "logspace", 
+    lambda start, end, num: np.logspace(float(start), float(end), int(num))
+)
+OmegaConf.register_new_resolver(
+    "linspace", 
+    lambda start, end, num: np.linspace(float(start), float(end), int(num))
+)
 
 @hydra.main(version_base=None, config_path="cfg", config_name="config")
 def main(cfg: DictConfig):
@@ -20,7 +30,7 @@ def main(cfg: DictConfig):
     alg: Algorithm = instantiate(cfg.alg)
     # print(alg.param_grid)
     
-    dataset: Dataset = instantiate(cfg.dataset)
+    dataset: Dataset = instantiate(cfg.dataset, model=cfg.llm.annotator)
     # print(dataset.name)
 
     evaluator = Evaluator(

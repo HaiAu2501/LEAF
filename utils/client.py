@@ -2,10 +2,7 @@ import os
 from openai import OpenAI
 from typing import Any, Dict, List, Optional
 
-from utils.format.annotating import Annotating
-from utils.format.coding import Coding
-from utils.format.ranking import Ranking
-
+from utils.format.annotating import Annotating, FeatureDescription
 
 class LLMClient:
     """
@@ -58,7 +55,7 @@ class LLMClient:
         
         return response
 
-    def get_annotations(self, messages: List[Dict[str, str]], temperature: Optional[float] = None) -> dict[str, str]:
+    def get_annotations(self, messages: List[Dict[str, str]], temperature: Optional[float] = None) -> list[FeatureDescription]:
         """
         Generate annotations from the model.
         
@@ -71,13 +68,12 @@ class LLMClient:
         """
         temp = temperature if temperature is not None else self.temperature
 
-        response = self.client.chat.completions.create(
+        response = self.client.beta.chat.completions.parse(
             model=self.model,
             messages=messages,
-            temperature=temp,
+            temperature=temp,   
             n=1,
-            format=Annotating,
-            stream=False,
-        ).choices[0].message.content
+            response_format=Annotating,
+        ).choices[0].message.parsed
 
-        return response
+        return response.descriptions
