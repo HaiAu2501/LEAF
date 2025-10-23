@@ -48,11 +48,15 @@ class Dataset:
             "Provide concise and clear descriptions for the following data features."
         )
 
-        human_msg = f"The task type is '{self.task_type}', where the goal is to predict {self.label_col}.\n"
+        human_msg = f"The dataset's name is '{self.name}'.\n"
+        human_msg += f"The task type is '{self.task_type}', where the goal is to predict '{self.label_col}'.\n"
         human_msg += "Please provide descriptions for the following features:\n"
         for feat in self.all_feats:
             feat_type = "categorical" if feat in self.cat_feats else "numerical"
-            human_msg += f"- Feature Name: {feat} | Type: {feat_type}\n"
+            if feat_type == "categorical":
+                human_msg += f"- Feature Name: {feat} | Type: {feat_type} | Possible Values: {np.unique(self.train[0][feat]).tolist()}\n"
+            else:
+                human_msg += f"- Feature Name: {feat} | Type: {feat_type} | Range: [{self.train[0][feat].min()}, {self.train[0][feat].max()}]\n"
 
         messages = [
             {"role": "system", "content": system_msg},
@@ -65,14 +69,15 @@ class Dataset:
                 # Check if all features are annotated (list equality)
                 if set(annotations.keys()) != set(self.all_feats):
                     raise ValueError("Annotations do not cover all features.")
+                return annotations
             except Exception as e:
                 if trial == n_trials - 1:
                     print(f"All trials failed. Error: {e}. Proceeding with default annotations.")
                     annotations = {feat: "No description available." for feat in self.all_feats}
+                    return annotations
                 else:
                     print(f"Trial {trial + 1} failed with error: {e}. Retrying...")
                     continue
-        return annotations
 
     def split(self, seed: int = 0):
         X_train, y_train = self.train
