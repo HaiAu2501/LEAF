@@ -3,8 +3,14 @@ from sklearn.model_selection import train_test_split
 from utils.preprocess import fetch_data, preprocess_data
 from utils.client import LLMClient
 
-class Dataset():
-    def __init__(self, name: str, ratio: list[float] = [0.2, 0.4, 0.4], model: str = "gpt-4o-mini", verbose: bool = False):
+class Dataset:
+    def __init__(
+        self,
+        name: str,
+        ratio: list[float] = [0.2, 0.4, 0.4],
+        model: str = "gpt-4o-mini",
+        verbose: bool = False
+    ):
         self.name = name
         self.ratio = ratio
         self.annotator = LLMClient(model=model)
@@ -45,7 +51,8 @@ class Dataset():
         human_msg = f"The task type is '{self.task_type}', where the goal is to predict {self.label_col}.\n"
         human_msg += "Please provide descriptions for the following features:\n"
         for feat in self.all_feats:
-            human_msg += f"- {feat}\n"
+            feat_type = "categorical" if feat in self.cat_feats else "numerical"
+            human_msg += f"- Feature Name: {feat} | Type: {feat_type}\n"
 
         messages = [
             {"role": "system", "content": system_msg},

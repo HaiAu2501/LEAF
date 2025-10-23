@@ -1,8 +1,12 @@
 import numpy as np
+import pandas as pd
 
 from abc import ABC, abstractmethod
-from typing import Literal, Tuple
+from typing import Literal
 
+FeatureMatrix = pd.DataFrame | np.ndarray
+TargetMatrix = pd.Series | np.ndarray
+DataTuple = tuple[FeatureMatrix, TargetMatrix]
 
 class Algorithm(ABC):
     def __init__(
@@ -16,9 +20,9 @@ class Algorithm(ABC):
         self.param_grid = param_grid
 
     @abstractmethod
-    def fit(self, train: Tuple[np.ndarray, np.ndarray], val: Tuple[np.ndarray, np.ndarray], seed: int) -> None:
+    def fit(self, train: DataTuple, val: DataTuple, seed: int) -> None:
         ...
 
     @abstractmethod
-    def predict(self, X_test: np.ndarray) -> np.ndarray:
+    def predict(self, X_test: FeatureMatrix) -> FeatureMatrix:
         ...
