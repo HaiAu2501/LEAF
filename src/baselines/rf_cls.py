@@ -5,68 +5,48 @@ from omegaconf import OmegaConf
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import GridSearchCV, ParameterGrid
 from src.template import Algorithm
+from utils.logger import Logger
 
 class CustomRFClassifier(Algorithm):
     """
     Custom Random Forest Classifier with optional hyperparameter tuning using GridSearchCV.
     """
-    def __init__(self,
+    def __init__(
+        self,
+        logger: Logger,
         param_grid: dict[str, list] = None,
-        use_oob: bool = False,
     ):
         super().__init__(
+            logger=logger,
+            name="RandomForest",
             task_type="classification",
             param_grid=param_grid,
         )
         self.model = None
-        self.use_oob = use_oob
-        self.param_grid = OmegaConf.to_container(self.param_grid, resolve=True)
 
     def fit(self, train: tuple, val: tuple, seed: int) -> None:
         self.model = None
         X_train, y_train = train
-        if self.use_oob:
-            # Hyperparameter tuning with OOB score
-            best_params, best_score = None, -np.inf
-            for params in ParameterGrid(self.param_grid):
-                est = RandomForestClassifier(
-                    oob_score=True,
-                    random_state=seed,
-                    **params
-                )
-                est.fit(X_train, y_train)
-                if est.oob_score_ > best_score:
-                    best_score, best_params = est.oob_score_, params
+        X_val, y_val = val
+        X_all = pd.concat([X_train, X_val], ignore_index=True)
+        y_all = np.concatenate([y_train, y_val])
 
-            # Refit the model with the best parameters
-            self.model = RandomForestClassifier(
-                oob_score=True,
+        n_train = len(X_train)
+        n_val = len(X_val)
+
+        train_idx = np.arange(n_train)
+        val_idx = np.arange(n_train, n_train + n_val)
+
+        self.model = GridSearchCV(
+            RandomForestClassifier(
                 random_state=seed,
-                **best_params
-            )
-            self.model.fit(X_train, y_train)
-        else:
-            # Classic GridSearchCV (without OOB)
-            X_val, y_val = val
-            X_all = pd.concat([X_train, X_val], ignore_index=True)
-            y_all = np.concatenate([y_train, y_val])
-
-            n_train = len(X_train)
-            n_val = len(X_val)
-
-            train_idx = np.arange(n_train)
-            val_idx = np.arange(n_train, n_train + n_val)
-
-            self.model = GridSearchCV(
-                RandomForestClassifier(
-                    random_state=seed,
-                    class_weight="balanced"
-                ),
-                self.param_grid,
-                cv=[(train_idx, val_idx)],
-                n_jobs=-1,
-            )
-            self.model.fit(X_all, y_all)
+                class_weight="balanced"
+            ),
+            self.param_grid,
+            cv=[(train_idx, val_idx)],
+            n_jobs=-1,
+        )
+        self.model.fit(X_all, y_all)
 
     def predict(self, X_test: np.ndarray) -> np.ndarray:
         return self.model.predict(X_test)

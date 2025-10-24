@@ -25,3 +25,4 @@ alg:
 
 paths:
   project_root: .
+  log_dir: ./logs

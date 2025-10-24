@@ -5,19 +5,21 @@ from omegaconf import OmegaConf
 from xgboost import XGBClassifier
 from sklearn.model_selection import GridSearchCV, StratifiedKFold
 from src.template import Algorithm
+from utils.logger import Logger
 
 class CustomXGBClassifier(Algorithm):
-    def __init__(self,
+    def __init__(
+        self,
+        logger: Logger,
         param_grid: dict[str, list] = None,
-        use_oob: bool = False,
     ):
         super().__init__(
+            logger=logger,
+            name="XGBoost",
             task_type="classification",
             param_grid=param_grid,
         )
         self.model = None
-        self.use_oob = use_oob
-        self.param_grid = OmegaConf.to_container(self.param_grid, resolve=True)
 
     def fit(self, train: tuple, val: tuple, seed: int) -> None:
         self.model = None

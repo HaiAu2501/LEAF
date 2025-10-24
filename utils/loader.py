@@ -2,6 +2,7 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from utils.preprocess import fetch_data, preprocess_data
 from utils.client import LLMClient
+from utils.logger import Logger
 
 class Dataset:
     def __init__(
@@ -9,7 +10,8 @@ class Dataset:
         name: str,
         ratio: list[float] = [0.2, 0.4, 0.4],
         model: str = "gpt-4o-mini",
-        verbose: bool = False
+        verbose: bool = False,
+        logger: Logger = None
     ):
         self.name = name
         self.ratio = ratio
@@ -32,6 +34,7 @@ class Dataset:
         self.num_feats: list[str] = data["num_feats"]
         self.descriptions: str = data["descriptions"]
         self.annotations: dict[str, str] = self.get_annotations()
+        logger.log_to_json(self.annotations, f"{self.name}_annotations.json")
 
     def get_cat_feats(self):
         return self.cat_feats
