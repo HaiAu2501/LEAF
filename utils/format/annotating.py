@@ -11,7 +11,7 @@ class FeatureDescription(BaseModel):
         description="Description of the feature"
     )
 
-class Annotating(BaseModel):
+class Annotation(BaseModel):
     descriptions: list[FeatureDescription] = Field(
         ...,
         description="Descriptions of the data features"

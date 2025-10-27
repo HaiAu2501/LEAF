@@ -2,7 +2,11 @@ import os
 from openai import OpenAI
 from typing import Any, Dict, List, Optional
 
-from utils.format.annotating import Annotating, FeatureDescription
+from utils.format.annotating import Annotation
+from utils.format.weighting import (
+    FeaturePrior, FeatureWeights,
+    InteractionPrior, InteractionWeights
+)
 
 class LLMClient:
     """
@@ -31,18 +35,25 @@ class LLMClient:
 
         self.client = OpenAI(api_key=api_key)
     
+    def _get_structured_response(
+        self,
+        messages: List[Dict[str, str]],
+        response_format: type,
+        temperature: Optional[float] = None
+    ) -> Any:
+        temp = temperature if temperature is not None else self.temperature
+
+        response = self.client.beta.chat.completions.parse(
+            model=self.model,
+            messages=messages,
+            temperature=temp,
+            n=1,
+            response_format=response_format,
+        ).choices[0].message.parsed
+
+        return response
+
     def get_response(self, messages: List[Dict[str, str]], temperature: Optional[float] = None) -> str:
-        """
-        Generate text response from the model.
-        
-        Args:
-            messages: List of message dictionaries
-            function_id: Optional function ID for logging
-            temperature: Optional temperature override
-            
-        Returns:
-            Text response from the model
-        """
         temp = temperature if temperature is not None else self.temperature
         
         response = self.client.chat.completions.create(
@@ -55,25 +66,23 @@ class LLMClient:
         
         return response
 
-    def get_annotations(self, messages: List[Dict[str, str]], temperature: Optional[float] = None) -> list[FeatureDescription]:
-        """
-        Generate annotations from the model.
-        
-        Args:
-            messages: List of message dictionaries
-            temperature: Optional temperature override 
+    def get_annotations(self, messages: List[Dict[str, str]], temperature: Optional[float] = None) -> Annotation:
+        return self._get_structured_response(
+            messages,
+            response_format=Annotation,
+            temperature=temperature
+        )
+    
+    def get_feature_weights(self, messages: List[Dict[str, str]], temperature: Optional[float] = None) -> FeatureWeights:
+        return self._get_structured_response(
+            messages,
+            response_format=FeatureWeights,
+            temperature=temperature
+        )
 
-        Returns:
-            Dictionary of annotations
-        """
-        temp = temperature if temperature is not None else self.temperature
-
-        response = self.client.beta.chat.completions.parse(
-            model=self.model,
-            messages=messages,
-            temperature=temp,   
-            n=1,
-            response_format=Annotating,
-        ).choices[0].message.parsed
-
-        return response.descriptions
+    def get_interaction_weights(self, messages: List[Dict[str, str]], temperature: Optional[float] = None) -> InteractionWeights:
+        return self._get_structured_response(
+            messages,
+            response_format=InteractionWeights,
+            temperature=temperature
+        )

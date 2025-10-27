@@ -67,7 +67,7 @@ class Dataset:
         ]
         for trial in range(n_trials):
             try:
-                response = self.annotator.get_annotations(messages=messages)
+                response = self.annotator.get_annotations(messages=messages).descriptions
                 annotations = {feat.name: feat.description for feat in response}
                 # Check if all features are annotated (list equality)
                 if set(annotations.keys()) != set(self.all_feats):

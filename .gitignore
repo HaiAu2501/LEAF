@@ -10,3 +10,4 @@ benchmarks/
 *.cpp
 outputs/
 logs/
+TEST/
