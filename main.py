@@ -1,9 +1,7 @@
-import os
 import hydra
-import numpy as np
 from dotenv import load_dotenv
 from hydra.utils import instantiate
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 
 from src.template import Algorithm
 from src.evaluator import Evaluator
@@ -16,7 +14,7 @@ load_dotenv()
 def main(cfg: DictConfig):
     logger: Logger = Logger(log_dir=cfg.paths.log_dir)
     alg: Algorithm = instantiate(cfg.alg, logger=logger)
-    dataset: Dataset = instantiate(cfg.dataset, model=cfg.llm.annotator, logger=logger)
+    dataset: Dataset = instantiate(cfg.dataset, logger=logger)
 
     evaluator = Evaluator(
         alg=alg,

@@ -9,7 +9,7 @@ class Dataset:
         self,
         name: str,
         ratio: list[float] = [0.2, 0.4, 0.4],
-        model: str = "gpt-4o-mini",
+        model: str = None,
         verbose: bool = False,
         logger: Logger = None
     ):
@@ -33,8 +33,9 @@ class Dataset:
         self.cat_feats: list[str] = data["cat_feats"]
         self.num_feats: list[str] = data["num_feats"]
         self.descriptions: str = data["descriptions"]
-        self.annotations: dict[str, str] = self.get_annotations()
-        logger.log_to_json(self.annotations, f"{self.name}_annotations.json")
+        if model is not None and logger is not None:
+            self.annotations: dict[str, str] = self.get_annotations()
+            logger.log_to_json(self.annotations, f"{self.name}_annotations.json")
 
     def get_cat_feats(self):
         return self.cat_feats

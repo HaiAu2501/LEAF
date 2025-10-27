@@ -3,12 +3,12 @@ defaults:
   - _self_
 
 llm:
-  annotator: gpt-4o-mini
   main_model: gpt-5-mini
   temperature: 1.0
 
 dataset:
   _target_: utils.loader.Dataset
+  model: gpt-4o-mini # Can be null if not using LLM-based annotations
   name: credit-g
   ratio: [0.4, 0.4, 0.2] # train, val, test
 

@@ -28,12 +28,13 @@ class LLMClient:
         self.temperature = temperature
 
         # Setup client
-        if model.startswith("gpt"):
+        if not self.model:
+            print("[WARNING] [LLMClient] No model specified. LLM functionalities will be disabled.")
+        elif model.startswith("gpt"):
             api_key = os.getenv("OPENAI_API_KEY")
+            self.client = OpenAI(api_key=api_key)
         else:
             raise ValueError("Unsupported model type. Only 'gpt' is supported.")
-
-        self.client = OpenAI(api_key=api_key)
     
     def _get_structured_response(
         self,
