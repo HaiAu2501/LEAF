@@ -34,12 +34,19 @@ class Algorithm(ABC):
         self.task_type = task_type
         if param_grid is None:
             param_grid = {}
-        self.param_grid = OmegaConf.to_container(param_grid, resolve=True)
+        else:
+            param_grid = OmegaConf.to_container(param_grid, resolve=True)
+        self.param_grid: dict[str, list] = param_grid
         self.logger = logger
         logger.log_to_json(
             {"name": name, "task_type": task_type, "param_grid": self.param_grid},
             f"{name}_config.json"
         )
+        self.prior_constructor = None
+
+    def setup(self, dataset, model):
+        print("[WARNING] [Algorithm] Your algorithm does not use prior information.")
+        pass
 
     @abstractmethod
     def fit(self, train: DataTuple, val: DataTuple, seed: int) -> None:

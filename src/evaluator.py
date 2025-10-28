@@ -10,13 +10,15 @@ class Evaluator():
         self,
         alg: Algorithm,
         dataset: Dataset,
-        n_data_splits: int,
-        n_alg_runs: int,
+        model: str = None,
+        n_data_splits: int = 5,
+        n_alg_runs: int = 3,
         random_state: int = 0,
         verbose: bool = False
     ):
         self.alg = alg
         self.dataset = dataset
+        self.model = model
         self.n_data_splits = n_data_splits
         self.n_alg_runs = n_alg_runs
         self.random_state = random_state
@@ -28,6 +30,7 @@ class Evaluator():
         self.val_size = dataset.ratio[1] / (dataset.ratio[1] + dataset.ratio[2])
 
     def run(self):
+        self.alg.setup(self.dataset, self.model)
         scores = []
         for i in range(self.n_data_splits):        
             for j in range(self.n_alg_runs):

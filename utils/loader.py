@@ -15,7 +15,11 @@ class Dataset:
     ):
         self.name = name
         self.ratio = ratio
-        self.annotator = LLMClient(model=model)
+        if model is not None:
+            self.annotator = LLMClient(model=model)
+        else:
+            print("[WARNING] [Dataset] No model specified for Dataset annotator. Annotations will not be generated.")
+            self.annotator = None
 
         data = fetch_data(
             dataset_name=name,

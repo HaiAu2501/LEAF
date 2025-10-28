@@ -2,10 +2,6 @@ defaults:
   - alg: rf_cls
   - _self_
 
-llm:
-  main_model: gpt-5-mini
-  temperature: 1.0
-
 dataset:
   _target_: utils.loader.Dataset
   model: gpt-4o-mini # Can be null if not using LLM-based annotations
@@ -13,6 +9,8 @@ dataset:
   ratio: [0.4, 0.4, 0.2] # train, val, test
 
 evaluator:
+  _target_: src.evaluator.Evaluator
+  model: gpt-4o-mini # Can be null if not using LLM priors
   n_data_splits: 5
   n_alg_runs: 3
   random_state: 0

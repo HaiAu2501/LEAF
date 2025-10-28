@@ -3,7 +3,7 @@ import pandas as pd
 
 from omegaconf import OmegaConf
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import GridSearchCV, ParameterGrid
+from sklearn.model_selection import GridSearchCV
 from src.template import Algorithm
 from utils.logger import Logger
 

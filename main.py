@@ -15,15 +15,7 @@ def main(cfg: DictConfig):
     logger: Logger = Logger(log_dir=cfg.paths.log_dir)
     alg: Algorithm = instantiate(cfg.alg, logger=logger)
     dataset: Dataset = instantiate(cfg.dataset, logger=logger)
-
-    evaluator = Evaluator(
-        alg=alg,
-        dataset=dataset,
-        n_data_splits=cfg.evaluator.n_data_splits,
-        n_alg_runs=cfg.evaluator.n_alg_runs,
-        random_state=cfg.evaluator.random_state,
-        verbose=cfg.evaluator.verbose
-    )
+    evaluator: Evaluator = instantiate(cfg.evaluator, alg=alg, dataset=dataset)
 
     mean_score, std_score = evaluator.run()
     print(f"Mean Score: {mean_score:.4f}, Std Dev: {std_score:.4f}")
