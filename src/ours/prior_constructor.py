@@ -1,3 +1,6 @@
+import numpy as np
+from math import lgamma, log
+from scipy.special import gammaln
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
 from utils.loader import Dataset
@@ -35,7 +38,81 @@ class PriorConstructor:
         self._prior_from_interaction()
 
     def construct(self, tree: DecisionTree) -> float:
-        pass
+        """
+        Compute log prior logP(T) for a fitted sklearn DecisionTree using the LLM-derived priors.
+
+        - Feature prior: Dirichlet-multinomial with uniform-LLM mixture.
+        - Interaction prior: multiplicative tilts per parent->child feature pair via log(1 + beta*s).
+
+        Returns:
+            float: logP(T)
+        """
+        # Hyperparameters
+        rho = 0.7      # uniform–LLM mixing
+        tau = None     # Dirichlet concentration; default = d
+        beta = 1.0     # interaction strength
+        eps = 1e-12
+
+        # --- feature names
+        feature_names = getattr(tree, "feature_names_in_", None)
+        if feature_names is None:
+            raise ValueError(
+                "Need feature_names_in_ on the fitted tree (fit with pandas DataFrame) to compute prior."
+            )
+        feature_names = list(feature_names)
+        d = len(feature_names)
+        idx2name = {i: feature_names[i] for i in range(d)}
+
+        # --- tree structure
+        t = tree.tree_
+        feat_idx = t.feature  # -2 is leaf
+        INTERNAL = np.where(feat_idx >= 0)[0]
+        L = int(INTERNAL.size)
+
+        # --- uniform–LLM mix for feature prior
+        fw = dict(self.feature_weights or {})
+        S = [f for f in feature_names if f in fw]
+        sw = float(sum(fw[f] for f in S))
+        r = {f: (fw[f] / sw if (f in S and sw > 0) else 0.0) for f in feature_names}
+        rho_hat = rho * (len(S) / d)
+        pi = {f: (1.0 - rho) / d + rho_hat * r[f] for f in feature_names}
+        tau_eff = float(d) if tau is None else float(tau)
+        alpha = np.array([tau_eff * pi[f] for f in feature_names], dtype=float)
+        alpha = np.maximum(alpha, eps)
+        alpha0 = float(alpha.sum())
+
+        counts = np.zeros(d, dtype=int)
+        for n in INTERNAL:
+            counts[feat_idx[n]] += 1
+
+        logP_feat = lgamma(alpha0) - lgamma(alpha0 + L) + float(np.sum(gammaln(alpha + counts) - gammaln(alpha)))
+
+        # --- interactions prior
+        s_map = {}
+        for (a, b), s in (self.interaction_weights or {}).items():
+            s = float(max(0.0, min(1.0, float(s))))
+            s_map[(a, b)] = max(s_map.get((a, b), 0.0), s)
+
+        n_nodes = t.node_count
+        left, right = t.children_left, t.children_right
+        parent = np.full(n_nodes, -1, dtype=int)
+        for p in INTERNAL:
+            for ch in (left[p], right[p]):
+                if ch != -1:
+                    parent[ch] = p
+
+        logP_int = 0.0
+        for n in INTERNAL:
+            p = parent[n]
+            if p != -1 and feat_idx[p] >= 0:
+                g = idx2name[feat_idx[p]]
+                f = idx2name[feat_idx[n]]
+                s = s_map.get((g, f), 0.0)
+                if s > 0.0 and beta != 0.0:
+                    logP_int += log(1.0 + beta * s)
+
+        logP = float(logP_feat + logP_int)
+        return logP
 
     def _prior_from_feature(self) -> None:
         system_msg = (
