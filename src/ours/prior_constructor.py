@@ -39,16 +39,15 @@ class PriorConstructor:
 
     def construct(self, tree: DecisionTree) -> float:
         """
-        Compute log prior logP(T) for a fitted sklearn DecisionTree using the LLM-derived priors.
+        Compute log prior logP(T) for a fitted sklearn DecisionTree using ONLY LLM-derived priors.
 
-        - Feature prior: Dirichlet-multinomial with uniform-LLM mixture.
+        - Feature prior: Dirichlet-multinomial purely from LLM weights (no uniform mixing).
         - Interaction prior: multiplicative tilts per parent->child feature pair via log(1 + beta*s).
 
         Returns:
             float: logP(T)
         """
         # Hyperparameters
-        rho = 0.7      # uniform–LLM mixing
         tau = None     # Dirichlet concentration; default = d
         beta = 1.0     # interaction strength
         eps = 1e-12
@@ -69,15 +68,22 @@ class PriorConstructor:
         INTERNAL = np.where(feat_idx >= 0)[0]
         L = int(INTERNAL.size)
 
-        # --- uniform–LLM mix for feature prior
+        # --- LLM-only feature prior
         fw = dict(self.feature_weights or {})
-        S = [f for f in feature_names if f in fw]
-        sw = float(sum(fw[f] for f in S))
-        r = {f: (fw[f] / sw if (f in S and sw > 0) else 0.0) for f in feature_names}
-        rho_hat = rho * (len(S) / d)
-        pi = {f: (1.0 - rho) / d + rho_hat * r[f] for f in feature_names}
+        # Ensure all features used by this tree have weights
+        missing = [f for f in feature_names if f not in fw]
+        if len(missing) > 0:
+            raise ValueError(
+                f"feature_weights missing entries for tree features: {missing}"
+            )
+        # Slice to this tree's feature subset
+        w = np.array([float(fw[f]) for f in feature_names], dtype=float)
+        sw = float(w.sum())
+        if not np.isfinite(sw) or sw <= 0:
+            raise ValueError("Sum of feature weights must be positive and finite.")
+        r = w / sw  # LLM-only proportions
         tau_eff = float(d) if tau is None else float(tau)
-        alpha = np.array([tau_eff * pi[f] for f in feature_names], dtype=float)
+        alpha = tau_eff * r
         alpha = np.maximum(alpha, eps)
         alpha0 = float(alpha.sum())
 
@@ -219,15 +225,17 @@ class PriorConstructor:
     def _sanitize_feature_weights(self, fw: FeatureWeights, valid_feats: set[str]) -> FeatureWeights:
         """
         - Keep only weights whose names exist in dataset.all_feats
-        - If nothing valid remains, raise to trigger retry/fallback
+        - Enforce FULL coverage: names must match dataset.all_feats exactly.
         - Preserve original explanation
         """
         filtered = [fp for fp in fw.weights if fp.name in valid_feats]
-        if len(filtered) == 0:
-            raise ValueError("No valid feature names produced by LLM.")
-        # If some valid features are missing, we do NOT force coverage; downstream can handle sparsity.
-        # However, we can fill missing features with a conservative default to stabilize usage if desired.
-        # Here: leave as-is (sparse prior) to respect LLM ranking.
+        names = {fp.name for fp in filtered}
+        if names != valid_feats:
+            missing = list(valid_feats - names)
+            extra = list(names - valid_feats)
+            raise ValueError(
+                f"Feature weights do not cover all features. Missing: {missing}; Extra: {extra}"
+            )
         return FeatureWeights(weights=filtered, explanation=fw.explanation)
 
     def _sanitize_interaction_weights(self, iw: InteractionWeights, valid_feats: set[str]) -> InteractionWeights:
