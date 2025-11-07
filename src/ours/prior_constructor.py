@@ -18,7 +18,7 @@ class PriorConstructor:
         model: str = "gpt-4o-mini",
         logger: Logger = None,
         n_trials: int = 3,
-        temperature: float = 0.7,
+        temperature: float = 1.0,
     ) -> None:
         self.dataset = dataset
         self.logger = logger
@@ -37,7 +37,7 @@ class PriorConstructor:
         self._prior_from_feature()
         self._prior_from_interaction()
 
-    def construct(self, tree: DecisionTree) -> float:
+    def construct(self, tree: DecisionTree, feature_names: list[str] | None = None) -> float:
         """
         Compute log prior logP(T) for a fitted sklearn DecisionTree using ONLY LLM-derived priors.
 
@@ -53,12 +53,18 @@ class PriorConstructor:
         eps = 1e-12
 
         # --- feature names
-        feature_names = getattr(tree, "feature_names_in_", None)
         if feature_names is None:
-            raise ValueError(
-                "Need feature_names_in_ on the fitted tree (fit with pandas DataFrame) to compute prior."
-            )
+            feature_names = getattr(tree, "feature_names_in_", None)
+            if feature_names is None:
+                # Fall back to using the DataFrame columns passed by caller; require explicit feature_names
+                raise ValueError(
+                    "Need feature_names_in_ on the fitted tree or pass feature_names explicitly to construct()."
+                )
         feature_names = list(feature_names)
+        # Optional safety: ensure provided names match the tree's dimensionality
+        n_in = getattr(tree, "n_features_in_", None)
+        if n_in is not None and len(feature_names) != int(n_in):
+            raise ValueError(f"feature_names length {len(feature_names)} != tree.n_features_in_ {n_in}")
         d = len(feature_names)
         idx2name = {i: feature_names[i] for i in range(d)}
 
@@ -125,16 +131,23 @@ class PriorConstructor:
             "You are an AutoML prior designer for decision-tree models. "
             "Given dataset context and feature descriptions, propose a weight in [0,1] for each feature. "
             "Higher weight means stronger prior to prefer splits using that feature. "
-            "Only use feature names from the provided list; do not invent new names. "
+            "Use the full scale [0,1] when appropriate, and provide exactly one weight for every listed feature. "
+            "Only use feature names from the provided list; do not invent, merge, or rename features. "
             "Keep explanations concise and pragmatic."
         )
 
         user_msg = (
             self.human_msg
-            + "\nYour task: Assign a weight in [0,1] for EACH feature listed above.\n"
+            + "\nYour task: Assign a weight w in [0,1] to EACH feature (use the full range when justified).\n"
+            + "Weighting rubric:\n"
+            + "- 0.90-1.00: Direct proxy/causal driver of the target; very strong and reliable signal; clear monotonic trend.\n"
+            + "- 0.70-0.80: Strong predictor with solid domain rationale or likely strong separation power.\n"
+            + "- 0.50-0.60: Moderately informative; default when mildly relevant but uncertain.\n"
+            + "- 0.30-0.40: Weak or ambiguous relation; noisy/redundant; high cardinality with arbitrary codes; many missing values.\n"
+            + "- 0.10-0.20: Marginal relevance; unlikely to help much.\n"
             + "Guidelines:\n"
-            + "- Consider type (categorical/numerical), ranges, cardinality, and plausible relevance to the target.\n"
-            + "- If uncertain, assign a moderate weight (e.g., 0.4~0.6).\n"
+            + "- Provide exactly one weight for every listed feature; do not add/remove/rename features.\n"
+            + "- Weights need not sum to 1; absolute scaling is acceptable (we will normalize downstream).\n"
             + "- Output must strictly follow the required schema.\n"
         )
 
