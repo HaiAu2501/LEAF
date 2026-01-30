@@ -32,6 +32,7 @@ class Algorithm(ABC):
         param_grid: dict[str, list] = None
     ):
         self.task_type = task_type
+        self.name = name
         if param_grid is None:
             param_grid = {}
         else:
@@ -39,8 +40,8 @@ class Algorithm(ABC):
         self.param_grid: dict[str, list] = param_grid
         self.logger = logger
         logger.log_to_json(
-            {"name": name, "task_type": task_type, "param_grid": self.param_grid},
-            f"{name}_config.json"
+            {"name": self.name, "task_type": self.task_type, "param_grid": self.param_grid},
+            f"{self.name}_config.json"
         )
         self.prior_constructor = None
 

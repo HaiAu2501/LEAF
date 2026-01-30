@@ -6,7 +6,7 @@ dataset:
   _target_: utils.loader.Dataset
   model: gpt-4o-mini # Can be null if not using LLM-based annotations
   name: credit-g
-  ratio: [0.4, 0.4, 0.2] # train, val, test
+  ratio: [0.6, 0.2, 0.2] # train, val, test
 
 evaluator:
   _target_: src.evaluator.Evaluator
@@ -18,7 +18,7 @@ evaluator:
 
 alg:
   param_grid:
-    n_estimators: [50] # fixed for fair comparison
+    n_estimators: [100] # fixed for fair comparison
     max_depth: [3] # fixed for fair comparison
 
 paths:

@@ -17,6 +17,7 @@ def main(cfg: DictConfig):
     dataset: Dataset = instantiate(cfg.dataset, logger=logger)
     evaluator: Evaluator = instantiate(cfg.evaluator, alg=alg, dataset=dataset)
 
+    print(f"Dataset: {dataset.name} | Task: {dataset.task_type} | Algorithm: {alg.name}")
     mean_score, std_score = evaluator.run()
     print(f"Mean Score: {mean_score:.4f}, Std Dev: {std_score:.4f}")
 
