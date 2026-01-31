@@ -1,8 +1,11 @@
 """
-Multi-agent Prior Factory for BAPF.
+Multi-agent Prior Factory for BAPF v5.
 
-Each agent maintains a prior distribution over features, derived from LLM.
-Factory-A approach: sample feature subset according to prior, then train CART.
+Key improvements:
+1. Adaptive prior updates based on feature redundancy
+2. Support for node-level feature masking (RF-style)
+3. Diversity-aware feature sampling
+4. Agent-level statistics tracking
 """
 import numpy as np
 from typing import Optional
@@ -19,12 +22,12 @@ DecisionTree = DecisionTreeClassifier | DecisionTreeRegressor
 
 class PriorAgent:
     """
-    A single agent that maintains a prior distribution over features.
+    A single agent that maintains an ADAPTIVE prior distribution over features.
     
-    Each agent can have different:
-    - Temperature for LLM sampling
-    - System prompt variations
-    - Prior weights
+    Key improvements:
+    - Prior can be updated based on diversity feedback
+    - Tracks feature usage for redundancy calculation
+    - Supports both tree-level and node-level sampling
     """
     
     def __init__(
@@ -33,20 +36,45 @@ class PriorAgent:
         feature_names: list[str],
         weights: dict[str, float],
         temperature: float = 1.0,
+        prior_update_rate: float = 0.1,
     ):
+        """
+        Args:
+            agent_id: Unique identifier for this agent
+            feature_names: List of feature names
+            weights: Initial weights from LLM
+            temperature: LLM temperature used to generate weights
+            prior_update_rate: Rate for adaptive prior updates (λ in feedback)
+        """
         self.agent_id = agent_id
         self.feature_names = feature_names
         self.temperature = temperature
+        self.prior_update_rate = prior_update_rate
         self.d = len(feature_names)
         
-        # Convert weights dict to probability distribution
-        w = np.array([weights.get(f, 0.5) for f in feature_names], dtype=float)
-        w = np.clip(w, 1e-6, None)  # Ensure positive
-        self.prior_probs = w / w.sum()
+        # Store original weights for reference
+        self.original_weights = weights.copy()
+        
+        # Current adaptive weights
+        self._weights = np.array(
+            [weights.get(f, 0.5) for f in feature_names], dtype=float
+        )
+        self._weights = np.clip(self._weights, 1e-6, None)
+        
+        # Track feature usage for redundancy calculation
+        self.feature_usage_counts = np.zeros(self.d, dtype=int)
+        self.feature_in_good_trees = np.zeros(self.d, dtype=int)  # Features in high-accuracy trees
         
         # Statistics
         self.n_trees_generated = 0
         self.total_reward = 0.0
+        self.reward_history: list[float] = []
+    
+    @property
+    def prior_probs(self) -> np.ndarray:
+        """Get current probability distribution over features."""
+        w = np.clip(self._weights, 1e-6, None)
+        return w / w.sum()
     
     def sample_features(self, subset_size: int, rng: np.random.Generator) -> list[int]:
         """
@@ -61,31 +89,111 @@ class PriorAgent:
         """
         subset_size = min(subset_size, self.d)
         indices = rng.choice(
-            self.d, 
-            size=subset_size, 
-            replace=False, 
+            self.d,
+            size=subset_size,
+            replace=False,
             p=self.prior_probs
         )
+        
+        # Track usage
+        for idx in indices:
+            self.feature_usage_counts[idx] += 1
+        
         return indices.tolist()
     
-    def update_stats(self, reward: float):
-        """Update agent statistics after generating a tree."""
+    def get_feature_mask(self, threshold: float = 0.3) -> np.ndarray:
+        """
+        Get a boolean mask of features to include based on prior weights.
+        
+        Features with weight < threshold are masked out.
+        This enables RF-style node-level feature sampling on a reduced set.
+        
+        Args:
+            threshold: Minimum weight to include feature
+            
+        Returns:
+            Boolean mask of shape (d,)
+        """
+        return self._weights >= threshold
+    
+    def update_stats(self, reward: float, used_features: Optional[list[int]] = None):
+        """
+        Update agent statistics after generating a tree.
+        
+        Args:
+            reward: Validation accuracy (normalized)
+            used_features: Feature indices actually used in the tree
+        """
         self.n_trees_generated += 1
         self.total_reward += reward
+        self.reward_history.append(reward)
+        
+        # Track which features appear in good trees
+        if used_features is not None and reward > 0.6:  # Above median threshold
+            for idx in used_features:
+                self.feature_in_good_trees[idx] += 1
+    
+    def update_prior_with_redundancy(
+        self,
+        global_feature_counts: np.ndarray,
+        total_good_trees: int,
+    ) -> None:
+        """
+        Update prior weights based on feature redundancy across all agents.
+        
+        Features that are overused in good trees across all agents get
+        their weight reduced for THIS agent, promoting diversity.
+        
+        Args:
+            global_feature_counts: Count of each feature's appearance in good trees (all agents)
+            total_good_trees: Total number of good trees generated
+        """
+        if total_good_trees == 0:
+            return
+        
+        # Compute redundancy: how often each feature appears in good trees
+        redundancy = global_feature_counts / (total_good_trees + 1e-8)
+        
+        # Update weights: reduce weight for highly redundant features
+        # prior_f ← prior_f × exp(-λ × redundancy_f)
+        decay = np.exp(-self.prior_update_rate * redundancy)
+        self._weights = self._weights * decay
+        
+        # Ensure minimum weight
+        self._weights = np.clip(self._weights, 0.05, 1.0)
+        
+        # Renormalize to maintain scale
+        self._weights = self._weights / self._weights.max()
+    
+    def reset_prior(self):
+        """Reset prior to original LLM-derived weights."""
+        self._weights = np.array(
+            [self.original_weights.get(f, 0.5) for f in self.feature_names],
+            dtype=float
+        )
+        self._weights = np.clip(self._weights, 1e-6, None)
     
     @property
     def mean_reward(self) -> float:
         if self.n_trees_generated == 0:
             return 0.0
         return self.total_reward / self.n_trees_generated
+    
+    @property
+    def reward_std(self) -> float:
+        if len(self.reward_history) < 2:
+            return 0.0
+        return float(np.std(self.reward_history))
 
 
 class MultiAgentPriorFactory:
     """
-    Factory that manages multiple prior agents.
+    Factory that manages multiple prior agents with diversity-aware updates.
     
-    Each agent is created with different LLM parameters (temperature, prompt variations)
-    to produce diverse priors over features.
+    Key improvements:
+    1. Tracks global feature usage for redundancy feedback
+    2. Periodically updates agent priors to promote diversity
+    3. Supports RF-style feature masking
     """
     
     SYSTEM_PROMPTS = [
@@ -103,7 +211,7 @@ class MultiAgentPriorFactory:
             "Weight features based on their likely causal or predictive relationship with the target. "
             "Strongly prefer features with clear domain justification."
         ),
-        # Agent 2: Statistical-focused  
+        # Agent 2: Statistical-focused
         (
             "You are a statistician designing feature priors for decision trees. "
             "Focus on statistical properties: variance, potential for separation, information content. "
@@ -132,15 +240,35 @@ class MultiAgentPriorFactory:
         n_agents: int = 3,
         logger: Optional[Logger] = None,
         n_trials: int = 3,
+        prior_update_rate: float = 0.15,
+        update_interval: int = 10,
     ):
+        """
+        Args:
+            dataset: Dataset object
+            model: LLM model name
+            n_agents: Number of agents to create
+            logger: Logger for saving outputs
+            n_trials: Number of retries for LLM calls
+            prior_update_rate: Rate for diversity-based prior updates
+            update_interval: How often to update priors (every N trees)
+        """
         self.dataset = dataset
         self.model = model
         self.n_agents = min(n_agents, len(self.SYSTEM_PROMPTS))
         self.logger = logger
         self.n_trials = n_trials
+        self.prior_update_rate = prior_update_rate
+        self.update_interval = update_interval
         
         self.feature_names = dataset.all_feats
+        self.d = len(self.feature_names)
         self.agents: list[PriorAgent] = []
+        
+        # Global tracking for diversity
+        self.global_feature_counts = np.zeros(self.d, dtype=int)
+        self.total_good_trees = 0
+        self.trees_since_update = 0
         
         # Build context message once
         self.human_msg = self._build_message()
@@ -162,8 +290,8 @@ class MultiAgentPriorFactory:
         return msg
     
     def _get_feature_weights_from_llm(
-        self, 
-        system_prompt: str, 
+        self,
+        system_prompt: str,
         temperature: float
     ) -> dict[str, float]:
         """Query LLM to get feature weights."""
@@ -229,6 +357,7 @@ class MultiAgentPriorFactory:
                 feature_names=self.feature_names,
                 weights=weights,
                 temperature=temperature,
+                prior_update_rate=self.prior_update_rate,
             )
             self.agents.append(agent)
             
@@ -247,6 +376,94 @@ class MultiAgentPriorFactory:
     def get_agent(self, agent_id: int) -> PriorAgent:
         """Get agent by ID."""
         return self.agents[agent_id]
+    
+    def record_tree_result(
+        self,
+        agent_id: int,
+        reward: float,
+        used_features: list[int],
+        is_good_tree: bool = False,
+    ) -> None:
+        """
+        Record results from a generated tree and potentially update priors.
+        
+        Args:
+            agent_id: Which agent generated the tree
+            reward: Validation accuracy
+            used_features: Feature indices used in the tree
+            is_good_tree: Whether this tree is considered "good" (high accuracy)
+        """
+        agent = self.agents[agent_id]
+        agent.update_stats(reward, used_features)
+        
+        # Update global feature counts for good trees
+        if is_good_tree:
+            for idx in used_features:
+                self.global_feature_counts[idx] += 1
+            self.total_good_trees += 1
+        
+        self.trees_since_update += 1
+        
+        # Periodically update priors for diversity
+        if self.trees_since_update >= self.update_interval:
+            self._update_all_priors()
+            self.trees_since_update = 0
+    
+    def _update_all_priors(self) -> None:
+        """Update all agent priors based on global redundancy."""
+        if self.total_good_trees == 0:
+            return
+        
+        # print(f"  Updating priors (global good trees: {self.total_good_trees})...")
+        
+        for agent in self.agents:
+            agent.update_prior_with_redundancy(
+                self.global_feature_counts,
+                self.total_good_trees,
+            )
+    
+    def get_feature_mask_for_agent(
+        self,
+        agent_id: int,
+        min_features: int = 3,
+    ) -> np.ndarray:
+        """
+        Get feature mask for RF-style node-level sampling.
+        
+        Returns a boolean mask where True = feature is available for splitting.
+        This allows using DecisionTree with max_features on a reduced set.
+        
+        Args:
+            agent_id: Agent ID
+            min_features: Minimum number of features to include
+            
+        Returns:
+            Boolean mask of shape (d,)
+        """
+        agent = self.agents[agent_id]
+        probs = agent.prior_probs
+        
+        # Include top features by probability
+        # At minimum, include min_features
+        n_include = max(min_features, int(self.d * 0.5))
+        
+        # Get indices of top features
+        top_indices = np.argsort(probs)[-n_include:]
+        
+        mask = np.zeros(self.d, dtype=bool)
+        mask[top_indices] = True
+        
+        return mask
+    
+    def reset_all_priors(self) -> None:
+        """Reset all agents to their original LLM-derived priors."""
+        for agent in self.agents:
+            agent.reset_prior()
+        
+        # Reset global tracking
+        self.global_feature_counts = np.zeros(self.d, dtype=int)
+        self.total_good_trees = 0
+        self.trees_since_update = 0
     
     def sample_tree(
         self,

@@ -1,10 +1,13 @@
 """
-Bandit-Allocated Prior Factories (BAPF) Classifier v4.
+Bandit-Allocated Prior Factories (BAPF) Classifier v5.
 
-Pure Bagging approach (like Random Forest):
-- All trees trained independently in parallel
-- No sequential dependency on ensemble
-- Diversity computed post-hoc for weighting
+Major improvements over v4:
+1. RF-style node-level feature subsampling (max_features on prior-filtered set)
+2. Split validation: val_bandit + val_ensemble
+3. Smoothed bandit rewards via EMA
+4. Diversity feedback into prior (adaptive prior updates)
+5. Error correlation for diversity instead of disagreement
+6. Grid search over BAPF-specific hyperparameters
 """
 import numpy as np
 import pandas as pd
@@ -12,24 +15,37 @@ import itertools
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 
+from tqdm import tqdm
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.metrics import balanced_accuracy_score
+from sklearn.model_selection import train_test_split
 
 from src.template import Algorithm
 from src.ours.prior_factory import MultiAgentPriorFactory
-from src.ours.bandit import UCB1, ThompsonSampling
+from src.ours.bandit import UCB1, ThompsonSampling, EpsilonGreedy
 from utils.logger import Logger
 
 
 class BAPFClassifier(Algorithm):
     """
-    Bandit-Allocated Prior Factories Classifier - Bagging Version.
+    Bandit-Allocated Prior Factories Classifier v5 with Grid Search.
     
-    Like Random Forest but with LLM-guided feature sampling:
-    - Each tree is independent (bagging)
-    - Bandit learns which agent produces better trees
-    - Final prediction: weighted majority vote
+    Supports grid search over both tree parameters and BAPF-specific parameters:
+    - feature_subset_ratio
+    - diversity_weight  
+    - val_bandit_ratio
+    - ema_alpha
+    - prior_update_rate
     """
+    
+    # BAPF-specific parameters that can be searched
+    BAPF_PARAMS = {
+        'feature_subset_ratio', 
+        'diversity_weight', 
+        'val_bandit_ratio', 
+        'ema_alpha', 
+        'prior_update_rate'
+    }
     
     def __init__(
         self,
@@ -37,20 +53,35 @@ class BAPFClassifier(Algorithm):
         param_grid: dict[str, list] = None,
         n_agents: int = 3,
         exploration_coef: float = 0.5,
-        feature_subset_ratio: float = 0.7,
         bandit_type: str = "ucb",
+        use_rf_style: bool = True,
+        # Default values for searchable params (used if not in param_grid)
+        feature_subset_ratio: float = 0.7,
+        diversity_weight: float = 0.3,
+        val_bandit_ratio: float = 0.3,
+        ema_alpha: float = 0.2,
+        prior_update_rate: float = 0.15,
     ):
         super().__init__(
             logger=logger,
-            name="BAPF",
+            name="BAPF_v5",
             task_type="classification",
             param_grid=param_grid,
         )
+        # Fixed params
         self.n_agents = n_agents
         self.exploration_coef = exploration_coef
-        self.feature_subset_ratio = feature_subset_ratio
         self.bandit_type = bandit_type
+        self.use_rf_style = use_rf_style
         
+        # Default values for searchable params
+        self._default_feature_subset_ratio = feature_subset_ratio
+        self._default_diversity_weight = diversity_weight
+        self._default_val_bandit_ratio = val_bandit_ratio
+        self._default_ema_alpha = ema_alpha
+        self._default_prior_update_rate = prior_update_rate
+        
+        # Will be set during fit
         self.prior_factory = None
         self.bandit = None
         self.trees = []
@@ -59,6 +90,9 @@ class BAPFClassifier(Algorithm):
         self.tree_agents = []
         self.classes_ = None
         self.rng = None
+        
+        # Best params found by grid search
+        self.best_params_ = {}
     
     def setup(self, dataset, model):
         """Initialize multi-agent prior factory."""
@@ -67,14 +101,135 @@ class BAPFClassifier(Algorithm):
             model=model,
             n_agents=self.n_agents,
             logger=self.logger,
+            prior_update_rate=self._default_prior_update_rate,
         )
+        self.dataset = dataset
+        self.model = model
+    
+    def _split_param_grid(self) -> tuple[list[dict], list[dict]]:
+        """
+        Split param_grid into BAPF params and tree params.
+        
+        Returns:
+            (bapf_param_combos, tree_param_combos)
+        """
+        bapf_grid = {}
+        tree_grid = {}
+        
+        for key, values in self.param_grid.items():
+            if key in self.BAPF_PARAMS:
+                bapf_grid[key] = values
+            elif key not in ('n_estimators', 'max_depth'):  # These come from config.yaml
+                tree_grid[key] = values
+        
+        # Generate combinations
+        def grid_to_combos(grid: dict) -> list[dict]:
+            if not grid:
+                return [{}]
+            keys = list(grid.keys())
+            vals = [grid[k] for k in keys]
+            return [dict(zip(keys, prod)) for prod in itertools.product(*vals)]
+        
+        return grid_to_combos(bapf_grid), grid_to_combos(tree_grid)
+    
+    def _get_bapf_param(self, params: dict, name: str) -> float:
+        """Get BAPF param from dict or use default."""
+        default_name = f'_default_{name}'
+        return params.get(name, getattr(self, default_name))
     
     def fit(self, train: tuple, val: tuple, seed: int):
         """
-        Fit BAPF ensemble using Bagging.
+        Fit BAPF v5 with grid search over hyperparameters.
         
-        Phase 1: Train all trees independently (bagging)
-        Phase 2: Compute diversity-aware weights
+        Strategy:
+        1. For each BAPF param combination:
+           - Train ensemble with those params
+           - Evaluate on val_ensemble
+        2. Select best BAPF params
+        3. Final model uses best params
+        """
+        X_train, y_train = train
+        X_val_full, y_val_full = val
+        
+        assert isinstance(X_train, pd.DataFrame), "X_train must be DataFrame"
+        assert isinstance(X_val_full, pd.DataFrame), "X_val must be DataFrame"
+        
+        self.classes_ = np.unique(y_train)
+        
+        # Split param grid
+        bapf_combos, tree_combos = self._split_param_grid()
+        
+        # If only one BAPF combo, skip search
+        if len(bapf_combos) == 1:
+            self._fit_single(
+                train, val, seed,
+                bapf_params=bapf_combos[0],
+                tree_combos=tree_combos,
+            )
+            self.best_params_ = bapf_combos[0]
+            return
+        
+        # Grid search over BAPF params
+        best_score = -np.inf
+        best_bapf_params = bapf_combos[0]
+        
+        print(f"Grid searching over {len(bapf_combos)} BAPF param combinations...")
+        
+        for i, bapf_params in enumerate(tqdm(bapf_combos)):
+            # Reset prior factory for fresh start
+            self.prior_factory.reset_all_priors()
+            
+            # Fit with this param combination
+            score = self._fit_and_evaluate(
+                train, val, seed + i,
+                bapf_params=bapf_params,
+                tree_combos=tree_combos,
+            )
+            
+            if score > best_score:
+                best_score = score
+                best_bapf_params = bapf_params
+                
+            # if (i + 1) % 5 == 0:
+            #     print(f"  {i+1}/{len(bapf_combos)} done, best so far: {best_score:.4f}")
+        
+        print(f"Best BAPF params: {best_bapf_params} with score {best_score:.4f}")
+        self.best_params_ = best_bapf_params
+        
+        # Final fit with best params
+        self.prior_factory.reset_all_priors()
+        self._fit_single(
+            train, val, seed,
+            bapf_params=best_bapf_params,
+            tree_combos=tree_combos,
+        )
+    
+    def _fit_and_evaluate(
+        self,
+        train: tuple,
+        val: tuple,
+        seed: int,
+        bapf_params: dict,
+        tree_combos: list[dict],
+    ) -> float:
+        """Fit with given params and return validation score."""
+        self._fit_single(train, val, seed, bapf_params, tree_combos)
+        
+        # Evaluate on full val set
+        X_val, y_val = val
+        y_pred = self.predict(X_val)
+        return balanced_accuracy_score(y_val, y_pred)
+    
+    def _fit_single(
+        self,
+        train: tuple,
+        val: tuple,
+        seed: int,
+        bapf_params: dict,
+        tree_combos: list[dict],
+    ):
+        """
+        Fit a single BAPF ensemble with given parameters.
         """
         self.trees = []
         self.tree_features = []
@@ -83,146 +238,165 @@ class BAPFClassifier(Algorithm):
         self.rng = np.random.default_rng(seed)
         
         X_train, y_train = train
-        X_val, y_val = val
+        X_val_full, y_val_full = val
         
-        assert isinstance(X_train, pd.DataFrame), "X_train must be DataFrame"
-        assert isinstance(X_val, pd.DataFrame), "X_val must be DataFrame"
-        
-        self.classes_ = np.unique(y_train)
         feature_names = list(X_train.columns)
         d = len(feature_names)
         N = len(X_train)
-        n_val = len(X_val)
         
-        # Ensemble size
-        n_estimators_list = self.param_grid.get("n_estimators", [50])
+        # Get BAPF params
+        feature_subset_ratio = self._get_bapf_param(bapf_params, 'feature_subset_ratio')
+        diversity_weight = self._get_bapf_param(bapf_params, 'diversity_weight')
+        val_bandit_ratio = self._get_bapf_param(bapf_params, 'val_bandit_ratio')
+        ema_alpha = self._get_bapf_param(bapf_params, 'ema_alpha')
+        prior_update_rate = self._get_bapf_param(bapf_params, 'prior_update_rate')
+        
+        # Update prior factory's update rate
+        for agent in self.prior_factory.agents:
+            agent.prior_update_rate = prior_update_rate
+        
+        # Split validation set
+        X_val_bandit, X_val_ens, y_val_bandit, y_val_ens = train_test_split(
+            X_val_full, y_val_full,
+            test_size=(1 - val_bandit_ratio),
+            random_state=seed,
+            stratify=y_val_full if len(np.unique(y_val_full)) > 1 else None
+        )
+        
+        # Ensemble size from config (passed via alg.param_grid in config.yaml)
+        n_estimators_list = self.param_grid.get("n_estimators", [100])
         n_trees = int(max(n_estimators_list))
         
-        # Feature subset size
-        m_sub = max(1, int(d * self.feature_subset_ratio))
+        max_depth_list = self.param_grid.get("max_depth", [3])
+        max_depth = int(max(max_depth_list))
         
-        # Tree hyperparameter grid
-        grid_no_n = {k: v for k, v in self.param_grid.items() if k != "n_estimators"}
-        if len(grid_no_n) == 0:
-            tree_param_combos = [{}]
-        else:
-            keys = list(grid_no_n.keys())
-            vals = [grid_no_n[k] for k in keys]
-            tree_param_combos = [dict(zip(keys, prod)) for prod in itertools.product(*vals)]
+        # Feature subset size
+        m_prior = max(1, int(d * feature_subset_ratio))
+        
+        # RF-style max_features
+        max_features_node = max(1, int(np.sqrt(m_prior))) if self.use_rf_style else None
         
         # Initialize bandit
         if self.bandit_type == "ts":
-            self.bandit = ThompsonSampling(n_arms=self.n_agents, random_state=seed)
+            self.bandit = ThompsonSampling(
+                n_arms=self.n_agents, random_state=seed, ema_alpha=ema_alpha
+            )
+        elif self.bandit_type == "eps":
+            self.bandit = EpsilonGreedy(
+                n_arms=self.n_agents, random_state=seed, ema_alpha=ema_alpha
+            )
         else:
             self.bandit = UCB1(
-                n_arms=self.n_agents, 
+                n_arms=self.n_agents,
                 exploration_coef=self.exploration_coef,
-                random_state=seed
+                random_state=seed,
+                ema_alpha=ema_alpha,
+                use_risk_adjusted=True,
+                risk_coef=0.3,
             )
         
-        # ============ PHASE 1: Train all trees independently (Bagging) ============
-        val_accuracies = []
-        val_predictions = []  # Store predictions for diversity calculation
+        # Train trees
+        val_ens_accs = []
+        val_ens_errors = []
+        good_tree_threshold = 0.55
         
         for i in range(n_trees):
             # 1. Bandit selects agent
             agent_id = self.bandit.select_arm()
             agent = self.prior_factory.get_agent(agent_id)
             
-            # 2. Sample features according to agent's prior
-            feat_indices = agent.sample_features(m_sub, self.rng)
+            # 2. Sample features
+            feat_indices = agent.sample_features(m_prior, self.rng)
             feat_names_subset = [feature_names[j] for j in feat_indices]
             
-            # 3. Bootstrap sample (key part of bagging)
+            # 3. Bootstrap sample
             boot_idx = self.rng.integers(0, N, size=N)
             X_boot = X_train.iloc[boot_idx][feat_names_subset]
             y_boot = y_train[boot_idx]
             
-            # 4. Find best tree params via validation
-            best_tree = None
-            best_val_acc = -1
-            best_val_pred = None
+            # 4. Select tree params (cycle through or pick best from previous)
+            tree_params = tree_combos[i % len(tree_combos)]
             
-            for params in tree_param_combos:
-                tree = DecisionTreeClassifier(
-                    random_state=int(self.rng.integers(0, 2**31 - 1)),
-                    class_weight="balanced",
-                    **params
-                )
-                tree.fit(X_boot, y_boot)
-                
-                y_pred_val = tree.predict(X_val[feat_names_subset])
-                val_acc = balanced_accuracy_score(y_val, y_pred_val)
-                
-                if val_acc > best_val_acc:
-                    best_val_acc = val_acc
-                    best_tree = tree
-                    best_val_pred = y_pred_val
+            # 5. Train tree
+            tree = DecisionTreeClassifier(
+                random_state=int(self.rng.integers(0, 2**31 - 1)),
+                class_weight="balanced",
+                max_features=max_features_node,
+                max_depth=max_depth,
+                **tree_params
+            )
+            tree.fit(X_boot, y_boot)
             
-            # 5. Store tree (independent of other trees - bagging)
-            self.trees.append(best_tree)
+            # 6. Evaluate
+            y_pred_bandit = tree.predict(X_val_bandit[feat_names_subset])
+            val_bandit_acc = balanced_accuracy_score(y_val_bandit, y_pred_bandit)
+            
+            y_pred_ens = tree.predict(X_val_ens[feat_names_subset])
+            val_ens_acc = balanced_accuracy_score(y_val_ens, y_pred_ens)
+            error_vector = (y_pred_ens != y_val_ens).astype(float)
+            
+            # 7. Store
+            self.trees.append(tree)
             self.tree_features.append(feat_names_subset)
             self.tree_agents.append(agent_id)
-            val_accuracies.append(best_val_acc)
-            val_predictions.append(best_val_pred)
+            val_ens_accs.append(val_ens_acc)
+            val_ens_errors.append(error_vector)
             
-            # 6. Update bandit with accuracy as reward
-            reward = (best_val_acc - 0.5) * 2  # Normalize to [0, 1]
-            reward = np.clip(reward, 0.0, 1.0)
+            # 8. Update bandit
+            reward = np.clip((val_bandit_acc - 0.5) * 2, 0.0, 1.0)
             self.bandit.update(agent_id, reward)
-            agent.update_stats(reward)
+            
+            # 9. Record for prior update
+            used_in_tree = np.where(tree.feature_importances_ > 0)[0].tolist()
+            is_good = val_bandit_acc > good_tree_threshold
+            self.prior_factory.record_tree_result(
+                agent_id=agent_id,
+                reward=val_bandit_acc,
+                used_features=[feat_indices[j] for j in used_in_tree if j < len(feat_indices)],
+                is_good_tree=is_good,
+            )
         
-        # ============ PHASE 2: Compute diversity-aware weights ============
-        val_accuracies = np.array(val_accuracies)
-        val_predictions = np.array(val_predictions)  # Shape: (n_trees, n_val)
+        # Compute error-correlation weights
+        val_ens_accs = np.array(val_ens_accs)
+        val_ens_errors = np.array(val_ens_errors)
         
-        # Compute pairwise disagreement matrix
         n_trees_actual = len(self.trees)
-        disagreement = np.zeros((n_trees_actual, n_trees_actual))
+        error_corr = np.zeros((n_trees_actual, n_trees_actual))
+        
         for i in range(n_trees_actual):
             for j in range(i + 1, n_trees_actual):
-                dis = np.mean(val_predictions[i] != val_predictions[j])
-                disagreement[i, j] = dis
-                disagreement[j, i] = dis
+                corr = np.corrcoef(val_ens_errors[i], val_ens_errors[j])[0, 1]
+                if np.isnan(corr):
+                    corr = 0.0
+                error_corr[i, j] = corr
+                error_corr[j, i] = corr
         
-        # Diversity score: average disagreement with other trees
-        diversity_scores = disagreement.sum(axis=1) / (n_trees_actual - 1 + 1e-8)
+        mean_corr = error_corr.sum(axis=1) / (n_trees_actual - 1 + 1e-8)
+        diversity_scores = 1 - mean_corr
         
-        # Combined score: accuracy + diversity bonus
-        # Normalize both to [0, 1]
-        acc_norm = (val_accuracies - val_accuracies.min()) / (val_accuracies.max() - val_accuracies.min() + 1e-8)
-        div_norm = (diversity_scores - diversity_scores.min()) / (diversity_scores.max() - diversity_scores.min() + 1e-8)
+        # Normalize and combine
+        acc_range = val_ens_accs.max() - val_ens_accs.min()
+        div_range = diversity_scores.max() - diversity_scores.min()
         
-        # Weight diversity less than accuracy (accuracy is primary)
-        combined = 0.8 * acc_norm + 0.2 * div_norm
+        acc_norm = (val_ens_accs - val_ens_accs.min()) / (acc_range + 1e-8)
+        div_norm = (diversity_scores - diversity_scores.min()) / (div_range + 1e-8)
         
-        # Convert to weights via softmax
+        combined = (1 - diversity_weight) * acc_norm + diversity_weight * div_norm
+        
+        # Softmax weights
         temperature = 0.5
         weights = np.exp(combined / temperature)
         weights = weights / weights.sum()
         
         self.tree_weights = weights.tolist()
-        
-        # ============ Logging ============
-        agent_counts = [0] * self.n_agents
-        agent_accs = [[] for _ in range(self.n_agents)]
-        for a, acc in zip(self.tree_agents, val_accuracies):
-            agent_counts[a] += 1
-            agent_accs[a].append(acc)
-        
-        print(f"BAPF (Bagging): {n_trees} trees, {self.n_agents} agents")
-        print(f"  Trees per agent: {agent_counts}")
-        print(f"  Mean val acc per agent: {[f'{np.mean(r):.4f}' if r else 'N/A' for r in agent_accs]}")
-        print(f"  Overall mean val acc: {val_accuracies.mean():.4f}")
-        print(f"  Mean diversity: {diversity_scores.mean():.4f}")
     
     def predict(self, X_test) -> np.ndarray:
-        """Predict class labels via weighted majority vote."""
+        """Predict class labels."""
         proba = self.predict_proba(X_test)
         return self.classes_[np.argmax(proba, axis=1)]
     
     def predict_proba(self, X_test) -> np.ndarray:
-        """Predict class probabilities using weighted voting."""
+        """Predict class probabilities."""
         if len(self.trees) == 0:
             raise ValueError("Model not fitted.")
         
@@ -235,7 +409,6 @@ class BAPFClassifier(Algorithm):
         for tree, feats, weight in zip(self.trees, self.tree_features, self.tree_weights):
             proba = tree.predict_proba(X_test_df[feats])
             
-            # Align to global classes
             aligned = np.zeros((n_samples, K), dtype=float)
             for j, cls in enumerate(tree.classes_):
                 k = int(np.where(self.classes_ == cls)[0][0])
@@ -244,5 +417,4 @@ class BAPFClassifier(Algorithm):
             P += weight * aligned
         
         P = P / (P.sum(axis=1, keepdims=True) + 1e-12)
-        
         return P

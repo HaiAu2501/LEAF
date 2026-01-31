@@ -3,3 +3,4 @@ _target_: src.baselines.rf_cls.CustomRFClassifier
 param_grid:
   min_samples_split: ${range:2, 17} # 2 to 16 inclusive
   min_samples_leaf: ${range:1, 17} # 1 to 16 inclusive
+  # max_features: [0.5, 0.7, 0.9]
