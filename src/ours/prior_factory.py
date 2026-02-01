@@ -1,12 +1,3 @@
-"""
-Multi-agent Prior Factory for BAPF v5.
-
-Key improvements:
-1. Adaptive prior updates based on feature redundancy
-2. Support for node-level feature masking (RF-style)
-3. Diversity-aware feature sampling
-4. Agent-level statistics tracking
-"""
 import numpy as np
 from typing import Optional
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor

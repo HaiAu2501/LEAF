@@ -1,5 +1,5 @@
 """
-Bandit-Allocated Prior Factories (BAPF) Classifier v5.
+Multi-Agent Prior Learning for Constructing Tree Ensembles (MAPLE) Classifier v5.
 
 Major improvements over v4:
 1. RF-style node-level feature subsampling (max_features on prior-filtered set)
@@ -7,7 +7,7 @@ Major improvements over v4:
 3. Smoothed bandit rewards via EMA
 4. Diversity feedback into prior (adaptive prior updates)
 5. Error correlation for diversity instead of disagreement
-6. Grid search over BAPF-specific hyperparameters
+6. Grid search over MAPLE-specific hyperparameters
 """
 import numpy as np
 import pandas as pd
@@ -26,11 +26,11 @@ from src.ours.bandit import UCB1, ThompsonSampling, EpsilonGreedy
 from utils.logger import Logger
 
 
-class BAPFClassifier(Algorithm):
+class MAPLEClassifier(Algorithm):
     """
-    Bandit-Allocated Prior Factories Classifier v5 with Grid Search.
+    Multi-Agent Prior Learning for Constructing Tree Ensembles Classifier v5 with Grid Search.
     
-    Supports grid search over both tree parameters and BAPF-specific parameters:
+    Supports grid search over both tree parameters and MAPLE-specific parameters:
     - feature_subset_ratio
     - diversity_weight  
     - val_bandit_ratio
@@ -38,8 +38,8 @@ class BAPFClassifier(Algorithm):
     - prior_update_rate
     """
     
-    # BAPF-specific parameters that can be searched
-    BAPF_PARAMS = {
+    # MAPLE-specific parameters that can be searched
+    MAPLE_PARAMS = {
         'feature_subset_ratio', 
         'diversity_weight', 
         'val_bandit_ratio', 
@@ -64,7 +64,7 @@ class BAPFClassifier(Algorithm):
     ):
         super().__init__(
             logger=logger,
-            name="BAPF_v5",
+            name="MAPLE_v5",
             task_type="classification",
             param_grid=param_grid,
         )
@@ -108,17 +108,17 @@ class BAPFClassifier(Algorithm):
     
     def _split_param_grid(self) -> tuple[list[dict], list[dict]]:
         """
-        Split param_grid into BAPF params and tree params.
+        Split param_grid into MAPLE params and tree params.
         
         Returns:
-            (bapf_param_combos, tree_param_combos)
+            (maple_param_combos, tree_param_combos)
         """
-        bapf_grid = {}
+        maple_grid = {}
         tree_grid = {}
         
         for key, values in self.param_grid.items():
-            if key in self.BAPF_PARAMS:
-                bapf_grid[key] = values
+            if key in self.MAPLE_PARAMS:
+                maple_grid[key] = values
             elif key not in ('n_estimators', 'max_depth'):  # These come from config.yaml
                 tree_grid[key] = values
         
@@ -130,22 +130,22 @@ class BAPFClassifier(Algorithm):
             vals = [grid[k] for k in keys]
             return [dict(zip(keys, prod)) for prod in itertools.product(*vals)]
         
-        return grid_to_combos(bapf_grid), grid_to_combos(tree_grid)
+        return grid_to_combos(maple_grid), grid_to_combos(tree_grid)
     
-    def _get_bapf_param(self, params: dict, name: str) -> float:
-        """Get BAPF param from dict or use default."""
+    def _get_maple_param(self, params: dict, name: str) -> float:
+        """Get MAPLE param from dict or use default."""
         default_name = f'_default_{name}'
         return params.get(name, getattr(self, default_name))
     
     def fit(self, train: tuple, val: tuple, seed: int):
         """
-        Fit BAPF v5 with grid search over hyperparameters.
+        Fit MAPLE v5 with grid search over hyperparameters.
         
         Strategy:
-        1. For each BAPF param combination:
+        1. For each MAPLE param combination:
            - Train ensemble with those params
            - Evaluate on val_ensemble
-        2. Select best BAPF params
+        2. Select best MAPLE params
         3. Final model uses best params
         """
         X_train, y_train = train
@@ -157,50 +157,50 @@ class BAPFClassifier(Algorithm):
         self.classes_ = np.unique(y_train)
         
         # Split param grid
-        bapf_combos, tree_combos = self._split_param_grid()
+        maple_combos, tree_combos = self._split_param_grid()
         
-        # If only one BAPF combo, skip search
-        if len(bapf_combos) == 1:
+        # If only one MAPLE combo, skip search
+        if len(maple_combos) == 1:
             self._fit_single(
                 train, val, seed,
-                bapf_params=bapf_combos[0],
+                maple_params=maple_combos[0],
                 tree_combos=tree_combos,
             )
-            self.best_params_ = bapf_combos[0]
+            self.best_params_ = maple_combos[0]
             return
         
-        # Grid search over BAPF params
+        # Grid search over MAPLE params
         best_score = -np.inf
-        best_bapf_params = bapf_combos[0]
+        best_maple_params = maple_combos[0]
         
-        print(f"Grid searching over {len(bapf_combos)} BAPF param combinations...")
+        print(f"Grid searching over {len(maple_combos)} MAPLE param combinations...")
         
-        for i, bapf_params in enumerate(tqdm(bapf_combos)):
+        for i, maple_params in enumerate(tqdm(maple_combos)):
             # Reset prior factory for fresh start
             self.prior_factory.reset_all_priors()
             
             # Fit with this param combination
             score = self._fit_and_evaluate(
                 train, val, seed + i,
-                bapf_params=bapf_params,
+                maple_params=maple_params,
                 tree_combos=tree_combos,
             )
             
             if score > best_score:
                 best_score = score
-                best_bapf_params = bapf_params
+                best_maple_params = maple_params
                 
             # if (i + 1) % 5 == 0:
-            #     print(f"  {i+1}/{len(bapf_combos)} done, best so far: {best_score:.4f}")
+            #     print(f"  {i+1}/{len(maple_combos)} done, best so far: {best_score:.4f}")
         
-        print(f"Best BAPF params: {best_bapf_params} with score {best_score:.4f}")
-        self.best_params_ = best_bapf_params
+        print(f"Best MAPLE params: {best_maple_params} with score {best_score:.4f}")
+        self.best_params_ = best_maple_params
         
         # Final fit with best params
         self.prior_factory.reset_all_priors()
         self._fit_single(
             train, val, seed,
-            bapf_params=best_bapf_params,
+            maple_params=best_maple_params,
             tree_combos=tree_combos,
         )
     
@@ -209,11 +209,11 @@ class BAPFClassifier(Algorithm):
         train: tuple,
         val: tuple,
         seed: int,
-        bapf_params: dict,
+        maple_params: dict,
         tree_combos: list[dict],
     ) -> float:
         """Fit with given params and return validation score."""
-        self._fit_single(train, val, seed, bapf_params, tree_combos)
+        self._fit_single(train, val, seed, maple_params, tree_combos)
         
         # Evaluate on full val set
         X_val, y_val = val
@@ -225,11 +225,11 @@ class BAPFClassifier(Algorithm):
         train: tuple,
         val: tuple,
         seed: int,
-        bapf_params: dict,
+        maple_params: dict,
         tree_combos: list[dict],
     ):
         """
-        Fit a single BAPF ensemble with given parameters.
+        Fit a single MAPLE ensemble with given parameters.
         """
         self.trees = []
         self.tree_features = []
@@ -244,12 +244,12 @@ class BAPFClassifier(Algorithm):
         d = len(feature_names)
         N = len(X_train)
         
-        # Get BAPF params
-        feature_subset_ratio = self._get_bapf_param(bapf_params, 'feature_subset_ratio')
-        diversity_weight = self._get_bapf_param(bapf_params, 'diversity_weight')
-        val_bandit_ratio = self._get_bapf_param(bapf_params, 'val_bandit_ratio')
-        ema_alpha = self._get_bapf_param(bapf_params, 'ema_alpha')
-        prior_update_rate = self._get_bapf_param(bapf_params, 'prior_update_rate')
+        # Get MAPLE params
+        feature_subset_ratio = self._get_maple_param(maple_params, 'feature_subset_ratio')
+        diversity_weight = self._get_maple_param(maple_params, 'diversity_weight')
+        val_bandit_ratio = self._get_maple_param(maple_params, 'val_bandit_ratio')
+        ema_alpha = self._get_maple_param(maple_params, 'ema_alpha')
+        prior_update_rate = self._get_maple_param(maple_params, 'prior_update_rate')
         
         # Update prior factory's update rate
         for agent in self.prior_factory.agents:

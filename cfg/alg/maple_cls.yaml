@@ -1,6 +1,6 @@
-_target_: src.ours.ours_cls.BAPFClassifier
+_target_: src.ours.maple_cls.MAPLEClassifier
 
-# Fixed BAPF parameters (not searched)
+# Fixed MAPLE parameters (not searched)
 n_agents: 3
 exploration_coef: 0.5
 bandit_type: ucb
@@ -12,7 +12,7 @@ param_grid:
   min_samples_split: ${range:2, 17}
   min_samples_leaf: ${range:1, 17}
 
-  # BAPF-specific parameters to search
+  # MAPLE-specific parameters to search
   feature_subset_ratio: [0.5, 0.7, 0.9]
   diversity_weight: [0.1, 0.2]
   val_bandit_ratio: [0.25, 0.5]

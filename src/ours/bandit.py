@@ -1,11 +1,3 @@
-"""
-Bandit policies for agent allocation in BAPF v5.
-
-Key improvements:
-- Smoothed rewards via EMA (Exponential Moving Average)
-- Risk-aware selection (mean - std option)
-- Rolling window statistics for stable agent evaluation
-"""
 import numpy as np
 from abc import ABC, abstractmethod
 from collections import deque
