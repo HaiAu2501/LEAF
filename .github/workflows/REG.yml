@@ -1,0 +1,52 @@
+name: REGRESSION
+
+on:
+  workflow_dispatch:
+    inputs:
+      algorithm:
+        description: "ALGORITHM"
+        required: true
+        default: "rf_reg"
+        type: choice
+        options:
+          - rf_reg
+          - et_reg
+          - maple_reg
+
+jobs:
+  run:
+    name: RUN | ${{ matrix.dataset }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        dataset:
+          - cholesterol
+          - wine
+          - wage
+          - abalone
+          - cars
+          - socmob
+      fail-fast: false
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+    steps:
+      - name: CHECKOUT REPOSITORY
+        uses: actions/checkout@v4
+
+      - name: SETUP PYTHON
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: INSTALL DEPENDENCIES
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: RUN EVALUATION | ALGORITHM ${{ github.event.inputs.algorithm }} | DATASET ${{ matrix.dataset }}
+        run: |
+          python main.py \
+                 alg=${{ github.event.inputs.algorithm }} \
+                 dataset.name=${{ matrix.dataset }}

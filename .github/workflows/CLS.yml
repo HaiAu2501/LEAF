@@ -1,4 +1,4 @@
-name: RUN
+name: CLASSIFICATION
 
 on:
   workflow_dispatch:
@@ -7,18 +7,31 @@ on:
         description: "ALGORITHM"
         required: true
         default: "rf_cls"
-      dataset:
-        description: "DATASET"
-        required: true
-        default: "credit-g"
         type: choice
         options:
-          - credit-g
+          - rf_cls
+          - et_cls
+          - maple_cls
 
 jobs:
   run:
-    name: RUN
+    name: RUN | ${{ matrix.dataset }}
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        dataset:
+          - credit-g
+          - diabetes
+          - compas
+          - heart-statlog
+          - liver
+          - breast
+          - vehicle
+          - australian
+          - haberman
+          - spambase
+          - tic-tac-toe
+      fail-fast: false
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
@@ -37,8 +50,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: RUN EVALUATION | ALGORITHM ${{ github.event.inputs.algorithm }} | DATASET ${{ github.event.inputs.dataset }}
+      - name: RUN EVALUATION | ALGORITHM ${{ github.event.inputs.algorithm }} | DATASET ${{ matrix.dataset }}
         run: |
           python main.py \
                  alg=${{ github.event.inputs.algorithm }} \
-                 dataset.name=${{ github.event.inputs.dataset }}
+                 dataset.name=${{ matrix.dataset }}

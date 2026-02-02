@@ -12,3 +12,7 @@ outputs/
 logs/
 TEST/
 *.txt
+maple_v2_cls.py 
+maple_v2_cls.yaml
+rotf_cls.py
+rotf_cls.yaml
