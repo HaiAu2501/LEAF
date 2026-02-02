@@ -10,13 +10,13 @@ from sklearn.preprocessing import LabelEncoder, OrdinalEncoder, StandardScaler
 
 DATASET_IDS = {
     # Classification
-    "kr-vs-kp": [3, "classification"],
-    "letter": [6, "classification"],
-    "balance-scale": [11, "classification"],
-    "mfeat-factors": [12, "classification"],
-    "mfeat-fourier": [14, "classification"],
-    "mfeat-karhunen": [16, "classification"],
-    "mfeat-morphological": [18, "classification"],
+    "pc4": [1049, "classification"],
+    "bank-marketing": [1461, "classification"],
+    "nomao": [1486, "classification"],
+    "phoneme": [1489, "classification"],
+    "adult": [1590, "classification"],
+    "PhishingWebsites": [4534, "classification"],
+    "churn": [40701, "classification"],
     "credit-g": [31, "classification"],
     "diabetes": [37, "classification"],
     "heart-statlog": [53, "classification"],

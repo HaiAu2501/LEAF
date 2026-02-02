@@ -20,21 +20,13 @@ jobs:
     strategy:
       matrix:
         dataset:
-          - kr-vs-kp
-          - letter
-          - balance-scale
-          - mfeat-factors
-          - mfeat-fourier
-          - mfeat-karhunen
-          - mfeat-morphological
-          - credit-g
-          - diabetes
-          - heart-statlog
-          - liver
-          - breast
-          - vehicle
-          - haberman
-          - spambase
+          - pc4
+          - bank-marketing
+          - nomao
+          - phoneme
+          - adult
+          - PhishingWebsites
+          - churn
       fail-fast: false
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
