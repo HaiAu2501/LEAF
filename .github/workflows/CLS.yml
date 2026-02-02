@@ -20,17 +20,21 @@ jobs:
     strategy:
       matrix:
         dataset:
+          - kr-vs-kp
+          - letter
+          - balance-scale
+          - mfeat-factors
+          - mfeat-fourier
+          - mfeat-karhunen
+          - mfeat-morphological
           - credit-g
           - diabetes
-          - compas
           - heart-statlog
           - liver
           - breast
           - vehicle
-          - australian
           - haberman
           - spambase
-          - tic-tac-toe
       fail-fast: false
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

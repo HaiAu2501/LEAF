@@ -10,17 +10,21 @@ from sklearn.preprocessing import LabelEncoder, OrdinalEncoder, StandardScaler
 
 DATASET_IDS = {
     # Classification
+    "kr-vs-kp": [3, "classification"],
+    "letter": [6, "classification"],
+    "balance-scale": [11, "classification"],
+    "mfeat-factors": [12, "classification"],
+    "mfeat-fourier": [14, "classification"],
+    "mfeat-karhunen": [16, "classification"],
+    "mfeat-morphological": [18, "classification"],
     "credit-g": [31, "classification"],
     "diabetes": [37, "classification"],
-    "compas": [42192, "classification"],
     "heart-statlog": [53, "classification"],
     "liver": [1480, "classification"],
     "breast": [15, "classification"],
     "vehicle": [994, "classification"],
-    "australian": [40981, "classification"],
     "haberman": [43, "classification"],
     "spambase": [44, "classification"],
-    "tic-tac-toe": [50, "classification"],
 
     # Regression
     "cholesterol": [204, "regression"],
