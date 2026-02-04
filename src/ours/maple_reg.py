@@ -18,7 +18,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 from tqdm import tqdm
 from sklearn.tree import DecisionTreeRegressor
-from sklearn.metrics import root_mean_squared_error, r2_score
+from sklearn.metrics import r2_score, root_mean_squared_error
 from sklearn.model_selection import train_test_split
 
 from src.template import Algorithm
@@ -56,12 +56,12 @@ class MAPLERegressor(Algorithm):
         exploration_coef: float = 0.5,
         bandit_type: str = "ucb",
         use_rf_style: bool = True,
-        # Default values for searchable params (used if not in param_grid)
+        # Default values for searchable params (tuned for regression)
         feature_subset_ratio: float = 0.7,
-        diversity_weight: float = 0.3,
-        val_bandit_ratio: float = 0.3,
+        diversity_weight: float = 0.15,  # Lower than classification
+        val_bandit_ratio: float = 0.2,   # Smaller for regression datasets
         ema_alpha: float = 0.2,
-        prior_update_rate: float = 0.15,
+        prior_update_rate: float = 0.1,
     ):
         super().__init__(
             logger=logger,
@@ -76,6 +76,7 @@ class MAPLERegressor(Algorithm):
         self.use_rf_style = use_rf_style
         
         # Default values for searchable params
+        # Note: Regression datasets are often smaller, so use smaller val_bandit_ratio
         self._default_feature_subset_ratio = feature_subset_ratio
         self._default_diversity_weight = diversity_weight
         self._default_val_bandit_ratio = val_bandit_ratio
@@ -279,8 +280,11 @@ class MAPLERegressor(Algorithm):
         # Feature subset size
         m_prior = max(1, int(d * feature_subset_ratio))
         
-        # RF-style max_features
-        max_features_node = max(1, int(np.sqrt(m_prior))) if self.use_rf_style else None
+        # RF-style max_features (use d/3 for regression, not sqrt like classification)
+        if self.use_rf_style:
+            max_features_node = max(1, int(m_prior / 3))
+        else:
+            max_features_node = None
         
         # Initialize bandit
         if self.bandit_type == "ts":
@@ -302,11 +306,8 @@ class MAPLERegressor(Algorithm):
             )
         
         # Train trees
-        val_ens_rmses = []
-        val_ens_residuals = []  # For diversity calculation
-        
-        # Compute baseline RMSE (predicting mean) for reward normalization
-        baseline_rmse = np.sqrt(np.mean((y_val_bandit - np.mean(y_train)) ** 2))
+        val_ens_r2s = []
+        val_ens_preds = []  # Store predictions for diversity calculation
         
         for i in range(n_trees):
             # 1. Bandit selects agent
@@ -334,32 +335,32 @@ class MAPLERegressor(Algorithm):
             )
             tree.fit(X_boot, y_boot)
             
-            # 6. Evaluate on bandit validation set
+            # 6. Evaluate on bandit validation set using R²
             y_pred_bandit = tree.predict(X_val_bandit[feat_names_subset])
-            val_bandit_rmse = root_mean_squared_error(y_val_bandit, y_pred_bandit)
+            val_bandit_r2 = r2_score(y_val_bandit, y_pred_bandit)
             
             # Evaluate on ensemble validation set
             y_pred_ens = tree.predict(X_val_ens[feat_names_subset])
-            val_ens_rmse = root_mean_squared_error(y_val_ens, y_pred_ens)
-            residual_vector = y_val_ens - y_pred_ens  # Residuals for diversity
+            val_ens_r2 = r2_score(y_val_ens, y_pred_ens)
             
             # 7. Store
             self.trees.append(tree)
             self.tree_features.append(feat_names_subset)
             self.tree_agents.append(agent_id)
-            val_ens_rmses.append(val_ens_rmse)
-            val_ens_residuals.append(residual_vector)
+            val_ens_r2s.append(val_ens_r2)
+            val_ens_preds.append(y_pred_ens)
             
-            # 8. Update bandit with normalized reward
-            # Convert RMSE to reward in [0, 1]: lower RMSE = higher reward
-            # reward = max(0, 1 - rmse/baseline_rmse)
-            reward = np.clip(1.0 - val_bandit_rmse / (baseline_rmse + 1e-8), 0.0, 1.0)
+            # 8. Update bandit with R²-based reward
+            # R² is naturally in (-∞, 1], we clip to [0, 1] for bandit
+            # R² = 0 means no better than mean, R² = 1 is perfect
+            # Negative R² means worse than mean prediction
+            reward = np.clip((val_bandit_r2 + 1) / 2, 0.0, 1.0)  # Map [-1, 1] -> [0, 1]
             self.bandit.update(agent_id, reward)
             
             # 9. Record for prior update
             used_in_tree = np.where(tree.feature_importances_ > 0)[0].tolist()
-            # Consider "good tree" if RMSE < 80% of baseline
-            is_good = val_bandit_rmse < 0.8 * baseline_rmse
+            # Consider "good tree" if R² > 0.1 (explains at least 10% variance)
+            is_good = val_bandit_r2 > 0.1
             self.prior_factory.record_tree_result(
                 agent_id=agent_id,
                 reward=reward,
@@ -367,39 +368,42 @@ class MAPLERegressor(Algorithm):
                 is_good_tree=is_good,
             )
         
-        # Compute residual-correlation weights (diversity based on residual correlation)
-        val_ens_rmses = np.array(val_ens_rmses)
-        val_ens_residuals = np.array(val_ens_residuals)
+        # Compute diversity based on prediction disagreement (complementarity)
+        val_ens_r2s = np.array(val_ens_r2s)
+        val_ens_preds = np.array(val_ens_preds)  # Shape: (n_trees, n_val_ens)
         
         n_trees_actual = len(self.trees)
-        residual_corr = np.zeros((n_trees_actual, n_trees_actual))
         
+        # Diversity: measure how different each tree's predictions are from ensemble mean
+        # Trees that make different errors are more valuable
+        ensemble_mean_pred = val_ens_preds.mean(axis=0)
+        
+        # For each tree, compute how much it disagrees with ensemble (excluding itself)
+        diversity_scores = np.zeros(n_trees_actual)
         for i in range(n_trees_actual):
-            for j in range(i + 1, n_trees_actual):
-                corr = np.corrcoef(val_ens_residuals[i], val_ens_residuals[j])[0, 1]
-                if np.isnan(corr):
-                    corr = 0.0
-                residual_corr[i, j] = corr
-                residual_corr[j, i] = corr
+            # Leave-one-out ensemble mean
+            other_preds = np.delete(val_ens_preds, i, axis=0)
+            if len(other_preds) > 0:
+                loo_mean = other_preds.mean(axis=0)
+                # Disagreement = variance of this tree's prediction from LOO ensemble
+                diversity_scores[i] = np.mean((val_ens_preds[i] - loo_mean) ** 2)
+            else:
+                diversity_scores[i] = 0.0
         
-        mean_corr = residual_corr.sum(axis=1) / (n_trees_actual - 1 + 1e-8)
-        diversity_scores = 1 - mean_corr  # Lower correlation = higher diversity
-        
-        # Convert RMSE to accuracy-like score (higher is better)
-        # Use negative RMSE normalized
-        rmse_min = val_ens_rmses.min()
-        rmse_max = val_ens_rmses.max()
-        rmse_range = rmse_max - rmse_min + 1e-8
-        
-        # Invert: lower RMSE -> higher score
-        acc_scores = 1 - (val_ens_rmses - rmse_min) / rmse_range
-        
-        # Normalize diversity
+        # Normalize diversity scores
         div_range = diversity_scores.max() - diversity_scores.min() + 1e-8
         div_norm = (diversity_scores - diversity_scores.min()) / div_range
         
-        # Combine accuracy and diversity
-        combined = (1 - diversity_weight) * acc_scores + diversity_weight * div_norm
+        # Normalize R² scores (higher is better)
+        # Clip very negative R² to avoid outliers dominating
+        r2_clipped = np.clip(val_ens_r2s, -1.0, 1.0)
+        r2_min = r2_clipped.min()
+        r2_max = r2_clipped.max()
+        r2_range = r2_max - r2_min + 1e-8
+        r2_norm = (r2_clipped - r2_min) / r2_range
+        
+        # Combine accuracy (R²) and diversity
+        combined = (1 - diversity_weight) * r2_norm + diversity_weight * div_norm
         
         # Softmax weights
         temperature = 0.5
