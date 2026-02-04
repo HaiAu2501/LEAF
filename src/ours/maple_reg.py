@@ -1,14 +1,11 @@
 """
 Multi-Agent Prior Learning for Constructing Tree Ensembles (MAPLE) Regressor v5.
 
-Regression variant adapted from MAPLEClassifier.
-
-Key differences from classification:
-1. Uses DecisionTreeRegressor instead of DecisionTreeClassifier
-2. Uses RMSE/R² for evaluation instead of balanced accuracy
+Regression variant adapted from MAPLEClassifier with minimal changes:
+1. DecisionTreeRegressor instead of DecisionTreeClassifier
+2. RMSE-based evaluation instead of balanced accuracy
 3. Weighted average prediction instead of probability voting
-4. Bandit rewards based on negative RMSE (normalized)
-5. No class balancing needed
+4. No class balancing
 """
 import numpy as np
 import pandas as pd
@@ -18,7 +15,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 from tqdm import tqdm
 from sklearn.tree import DecisionTreeRegressor
-from sklearn.metrics import r2_score, root_mean_squared_error
+from sklearn.metrics import root_mean_squared_error
 from sklearn.model_selection import train_test_split
 
 from src.template import Algorithm
@@ -56,12 +53,12 @@ class MAPLERegressor(Algorithm):
         exploration_coef: float = 0.5,
         bandit_type: str = "ucb",
         use_rf_style: bool = True,
-        # Default values for searchable params (tuned for regression)
+        # Default values for searchable params (used if not in param_grid)
         feature_subset_ratio: float = 0.7,
-        diversity_weight: float = 0.15,  # Lower than classification
-        val_bandit_ratio: float = 0.2,   # Smaller for regression datasets
+        diversity_weight: float = 0.3,
+        val_bandit_ratio: float = 0.3,
         ema_alpha: float = 0.2,
-        prior_update_rate: float = 0.1,
+        prior_update_rate: float = 0.15,
     ):
         super().__init__(
             logger=logger,
@@ -76,7 +73,6 @@ class MAPLERegressor(Algorithm):
         self.use_rf_style = use_rf_style
         
         # Default values for searchable params
-        # Note: Regression datasets are often smaller, so use smaller val_bandit_ratio
         self._default_feature_subset_ratio = feature_subset_ratio
         self._default_diversity_weight = diversity_weight
         self._default_val_bandit_ratio = val_bandit_ratio
@@ -91,9 +87,6 @@ class MAPLERegressor(Algorithm):
         self.tree_weights = []
         self.tree_agents = []
         self.rng = None
-        
-        # For reward normalization
-        self._y_std = 1.0
         
         # Best params found by grid search
         self.best_params_ = {}
@@ -144,22 +137,12 @@ class MAPLERegressor(Algorithm):
     def fit(self, train: tuple, val: tuple, seed: int):
         """
         Fit MAPLE v5 Regressor with grid search over hyperparameters.
-        
-        Strategy:
-        1. For each MAPLE param combination:
-           - Train ensemble with those params
-           - Evaluate on val_ensemble
-        2. Select best MAPLE params
-        3. Final model uses best params
         """
         X_train, y_train = train
         X_val_full, y_val_full = val
         
         assert isinstance(X_train, pd.DataFrame), "X_train must be DataFrame"
         assert isinstance(X_val_full, pd.DataFrame), "X_val must be DataFrame"
-        
-        # Store y_std for reward normalization
-        self._y_std = max(np.std(y_train), 1e-8)
         
         # Split param grid
         maple_combos, tree_combos = self._split_param_grid()
@@ -214,11 +197,11 @@ class MAPLERegressor(Algorithm):
         maple_params: dict,
         tree_combos: list[dict],
     ) -> float:
-        """Fit with given params and return validation RMSE (lower is better)."""
+        """Fit with given params and return validation RMSE."""
         self._fit_single(train, val, seed, maple_params, tree_combos)
         
-        # Evaluate on full val set
         X_val, y_val = val
+        y_val = np.asarray(y_val).ravel()
         y_pred = self.predict(X_val)
         return root_mean_squared_error(y_val, y_pred)
     
@@ -242,7 +225,7 @@ class MAPLERegressor(Algorithm):
         X_train, y_train = train
         X_val_full, y_val_full = val
         
-        # Flatten y if needed
+        # Flatten y arrays
         y_train = np.asarray(y_train).ravel()
         y_val_full = np.asarray(y_val_full).ravel()
         
@@ -270,7 +253,7 @@ class MAPLERegressor(Algorithm):
         y_val_bandit = np.asarray(y_val_bandit).ravel()
         y_val_ens = np.asarray(y_val_ens).ravel()
         
-        # Ensemble size from config (passed via alg.param_grid in config.yaml)
+        # Ensemble size from config
         n_estimators_list = self.param_grid.get("n_estimators", [100])
         n_trees = int(max(n_estimators_list))
         
@@ -280,11 +263,8 @@ class MAPLERegressor(Algorithm):
         # Feature subset size
         m_prior = max(1, int(d * feature_subset_ratio))
         
-        # RF-style max_features (use d/3 for regression, not sqrt like classification)
-        if self.use_rf_style:
-            max_features_node = max(1, int(m_prior / 3))
-        else:
-            max_features_node = None
+        # RF-style max_features at node level
+        max_features_node = max(1, int(np.sqrt(m_prior))) if self.use_rf_style else None
         
         # Initialize bandit
         if self.bandit_type == "ts":
@@ -305,9 +285,16 @@ class MAPLERegressor(Algorithm):
                 risk_coef=0.3,
             )
         
+        # Compute baseline RMSE for reward normalization (predicting mean)
+        y_mean = np.mean(y_train)
+        baseline_rmse = np.sqrt(np.mean((y_val_bandit - y_mean) ** 2))
+        baseline_rmse_ens = np.sqrt(np.mean((y_val_ens - y_mean) ** 2))
+        
         # Train trees
-        val_ens_r2s = []
-        val_ens_preds = []  # Store predictions for diversity calculation
+        val_ens_scores = []  # Accuracy-like scores (higher = better)
+        val_ens_errors = []  # Normalized error vectors for diversity
+        
+        good_tree_threshold = 0.55  # Same as classification
         
         for i in range(n_trees):
             # 1. Bandit selects agent
@@ -323,10 +310,10 @@ class MAPLERegressor(Algorithm):
             X_boot = X_train.iloc[boot_idx][feat_names_subset]
             y_boot = y_train[boot_idx]
             
-            # 4. Select tree params (cycle through or pick best from previous)
+            # 4. Select tree params
             tree_params = tree_combos[i % len(tree_combos)]
             
-            # 5. Train tree
+            # 5. Train tree (no class_weight for regression)
             tree = DecisionTreeRegressor(
                 random_state=int(self.rng.integers(0, 2**31 - 1)),
                 max_features=max_features_node,
@@ -335,75 +322,71 @@ class MAPLERegressor(Algorithm):
             )
             tree.fit(X_boot, y_boot)
             
-            # 6. Evaluate on bandit validation set using R²
+            # 6. Evaluate
             y_pred_bandit = tree.predict(X_val_bandit[feat_names_subset])
-            val_bandit_r2 = r2_score(y_val_bandit, y_pred_bandit)
+            val_bandit_rmse = root_mean_squared_error(y_val_bandit, y_pred_bandit)
             
-            # Evaluate on ensemble validation set
             y_pred_ens = tree.predict(X_val_ens[feat_names_subset])
-            val_ens_r2 = r2_score(y_val_ens, y_pred_ens)
+            val_ens_rmse = root_mean_squared_error(y_val_ens, y_pred_ens)
+            
+            # Convert RMSE to accuracy-like score in [0, 1]
+            # score = 1 - rmse/baseline means: 1 = perfect, 0 = as bad as mean, <0 = worse
+            val_bandit_score = np.clip(1 - val_bandit_rmse / (baseline_rmse + 1e-8), 0.0, 1.0)
+            val_ens_score = np.clip(1 - val_ens_rmse / (baseline_rmse_ens + 1e-8), 0.0, 1.0)
+            
+            # Error vector for diversity (analogous to classification's binary errors)
+            # Use absolute errors, normalized to [0, 1]
+            abs_errors = np.abs(y_val_ens - y_pred_ens)
+            max_error = abs_errors.max() + 1e-8
+            error_vector = abs_errors / max_error  # normalized to [0, 1]
             
             # 7. Store
             self.trees.append(tree)
             self.tree_features.append(feat_names_subset)
             self.tree_agents.append(agent_id)
-            val_ens_r2s.append(val_ens_r2)
-            val_ens_preds.append(y_pred_ens)
+            val_ens_scores.append(val_ens_score)
+            val_ens_errors.append(error_vector)
             
-            # 8. Update bandit with R²-based reward
-            # R² is naturally in (-∞, 1], we clip to [0, 1] for bandit
-            # R² = 0 means no better than mean, R² = 1 is perfect
-            # Negative R² means worse than mean prediction
-            reward = np.clip((val_bandit_r2 + 1) / 2, 0.0, 1.0)  # Map [-1, 1] -> [0, 1]
+            # 8. Update bandit (same as classification: reward in [0, 1])
+            reward = np.clip((val_bandit_score - 0.5) * 2, 0.0, 1.0)
             self.bandit.update(agent_id, reward)
             
             # 9. Record for prior update
             used_in_tree = np.where(tree.feature_importances_ > 0)[0].tolist()
-            # Consider "good tree" if R² > 0.1 (explains at least 10% variance)
-            is_good = val_bandit_r2 > 0.1
+            is_good = val_bandit_score > good_tree_threshold
             self.prior_factory.record_tree_result(
                 agent_id=agent_id,
-                reward=reward,
+                reward=val_bandit_score,
                 used_features=[feat_indices[j] for j in used_in_tree if j < len(feat_indices)],
                 is_good_tree=is_good,
             )
         
-        # Compute diversity based on prediction disagreement (complementarity)
-        val_ens_r2s = np.array(val_ens_r2s)
-        val_ens_preds = np.array(val_ens_preds)  # Shape: (n_trees, n_val_ens)
+        # Compute error-correlation weights (same logic as classification)
+        val_ens_scores = np.array(val_ens_scores)
+        val_ens_errors = np.array(val_ens_errors)
         
         n_trees_actual = len(self.trees)
+        error_corr = np.zeros((n_trees_actual, n_trees_actual))
         
-        # Diversity: measure how different each tree's predictions are from ensemble mean
-        # Trees that make different errors are more valuable
-        ensemble_mean_pred = val_ens_preds.mean(axis=0)
-        
-        # For each tree, compute how much it disagrees with ensemble (excluding itself)
-        diversity_scores = np.zeros(n_trees_actual)
         for i in range(n_trees_actual):
-            # Leave-one-out ensemble mean
-            other_preds = np.delete(val_ens_preds, i, axis=0)
-            if len(other_preds) > 0:
-                loo_mean = other_preds.mean(axis=0)
-                # Disagreement = variance of this tree's prediction from LOO ensemble
-                diversity_scores[i] = np.mean((val_ens_preds[i] - loo_mean) ** 2)
-            else:
-                diversity_scores[i] = 0.0
+            for j in range(i + 1, n_trees_actual):
+                corr = np.corrcoef(val_ens_errors[i], val_ens_errors[j])[0, 1]
+                if np.isnan(corr):
+                    corr = 0.0
+                error_corr[i, j] = corr
+                error_corr[j, i] = corr
         
-        # Normalize diversity scores
-        div_range = diversity_scores.max() - diversity_scores.min() + 1e-8
-        div_norm = (diversity_scores - diversity_scores.min()) / div_range
+        mean_corr = error_corr.sum(axis=1) / (n_trees_actual - 1 + 1e-8)
+        diversity_scores = 1 - mean_corr
         
-        # Normalize R² scores (higher is better)
-        # Clip very negative R² to avoid outliers dominating
-        r2_clipped = np.clip(val_ens_r2s, -1.0, 1.0)
-        r2_min = r2_clipped.min()
-        r2_max = r2_clipped.max()
-        r2_range = r2_max - r2_min + 1e-8
-        r2_norm = (r2_clipped - r2_min) / r2_range
+        # Normalize and combine
+        score_range = val_ens_scores.max() - val_ens_scores.min()
+        div_range = diversity_scores.max() - diversity_scores.min()
         
-        # Combine accuracy (R²) and diversity
-        combined = (1 - diversity_weight) * r2_norm + diversity_weight * div_norm
+        score_norm = (val_ens_scores - val_ens_scores.min()) / (score_range + 1e-8)
+        div_norm = (diversity_scores - diversity_scores.min()) / (div_range + 1e-8)
+        
+        combined = (1 - diversity_weight) * score_norm + diversity_weight * div_norm
         
         # Softmax weights
         temperature = 0.5
@@ -413,7 +396,7 @@ class MAPLERegressor(Algorithm):
         self.tree_weights = weights.tolist()
     
     def predict(self, X_test) -> np.ndarray:
-        """Predict target values using weighted average of trees."""
+        """Predict using weighted average of trees."""
         if len(self.trees) == 0:
             raise ValueError("Model not fitted.")
         
