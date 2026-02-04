@@ -26,6 +26,10 @@ jobs:
           - abalone
           - cars
           - socmob
+          - sulfur
+          - house_sales
+          - Bike_Sharing_Demand
+          - Brazilian_houses
       fail-fast: false
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

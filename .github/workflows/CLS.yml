@@ -20,13 +20,14 @@ jobs:
     strategy:
       matrix:
         dataset:
-          - pc4
-          - bank-marketing
-          - nomao
-          - phoneme
           - adult
-          - PhishingWebsites
-          - churn
+          - breast
+          - credit-g
+          - diabetes
+          - heart-statlog
+          - liver
+          - phoneme
+          - vehicle
       fail-fast: false
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

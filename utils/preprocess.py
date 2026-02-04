@@ -10,21 +10,14 @@ from sklearn.preprocessing import LabelEncoder, OrdinalEncoder, StandardScaler
 
 DATASET_IDS = {
     # Classification
-    "pc4": [1049, "classification"],
-    "bank-marketing": [1461, "classification"],
-    "nomao": [1486, "classification"],
-    "phoneme": [1489, "classification"],
     "adult": [1590, "classification"],
-    "PhishingWebsites": [4534, "classification"],
-    "churn": [40701, "classification"],
+    "breast": [15, "classification"],
     "credit-g": [31, "classification"],
     "diabetes": [37, "classification"],
     "heart-statlog": [53, "classification"],
     "liver": [1480, "classification"],
-    "breast": [15, "classification"],
+    "phoneme": [1489, "classification"],
     "vehicle": [994, "classification"],
-    "haberman": [43, "classification"],
-    "spambase": [44, "classification"],
 
     # Regression
     "cholesterol": [204, "regression"],
@@ -32,7 +25,11 @@ DATASET_IDS = {
     "wage": [534, "regression"],
     "abalone": [44956, "regression"],
     "cars": [44994, "regression"],
-    "socmob": [44987, "regression"]
+    "socmob": [44987, "regression"],
+    "sulfur": [44145, "regression"],
+    "house_sales": [44144, "regression"],
+    "Bike_Sharing_Demand": [44142, "regression"],
+    "Brazilian_houses": [44141, "regression"],
 }
 
 
