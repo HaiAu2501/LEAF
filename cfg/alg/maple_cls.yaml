@@ -1,7 +1,7 @@
 _target_: src.ours.maple_cls.MAPLEClassifier
 
 # Fixed MAPLE parameters (not searched)
-n_agents: 3
+n_agents: 1
 exploration_coef: 0.5
 bandit_type: ucb
 use_rf_style: true
