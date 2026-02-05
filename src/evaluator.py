@@ -1,6 +1,6 @@
 import numpy as np
 
-from sklearn.metrics import balanced_accuracy_score, root_mean_squared_error
+from sklearn.metrics import balanced_accuracy_score, r2_score
 
 from src.template import Algorithm
 from utils.loader import Dataset
@@ -47,7 +47,7 @@ class Evaluator():
         X_test, y_test = test
         y_pred = self.alg.predict(X_test)
         if self.task_type == "regression":
-            return root_mean_squared_error(y_test, y_pred)
+            return r2_score(y_test, y_pred)
         elif self.task_type == "classification":
             return balanced_accuracy_score(y_test, y_pred)
             
