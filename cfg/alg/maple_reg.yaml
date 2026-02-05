@@ -1,0 +1,24 @@
+_target_: src.ours.maple_reg.MAPLERegressor
+
+# Fixed MAPLE parameters (not searched)
+n_agents: 1
+exploration_coef: 0.5
+bandit_type: ucb
+use_rf_style: true
+
+# Searchable parameters in param_grid
+param_grid:
+  # Tree parameters
+  min_samples_split: ${range:2, 17}
+  min_samples_leaf: ${range:1, 17}
+
+  # MAPLE-specific parameters to search
+  feature_subset_ratio: [0.5, 0.7, 0.9]
+  diversity_weight: [0.1, 0.2, 0.3]
+  ema_alpha: [0.15, 0.25]
+  prior_update_rate: [0.1, 0.2]
+
+  # v6 parameters (OOB-based bagging)
+  prior_temperature: [1.0, 2.0, 3.0]
+  uniform_mix_ratio: [0.0]
+  weight_uniform_mix: [0.0]
