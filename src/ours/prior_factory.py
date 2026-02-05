@@ -15,10 +15,10 @@ class PriorAgent:
     """
     A single agent that maintains an ADAPTIVE prior distribution over features.
     
-    Key improvements:
-    - Prior can be updated based on diversity feedback
-    - Tracks feature usage for redundancy calculation
-    - Supports both tree-level and node-level sampling
+    v6 improvements:
+    - Hardness-weighted prior updates (instead of binary good/bad threshold)
+    - EMA-based prior smoothing
+    - Better tracking of feature effectiveness
     """
     
     def __init__(
@@ -28,6 +28,7 @@ class PriorAgent:
         weights: dict[str, float],
         temperature: float = 1.0,
         prior_update_rate: float = 0.1,
+        ema_decay: float = 0.95,
     ):
         """
         Args:
@@ -36,11 +37,13 @@ class PriorAgent:
             weights: Initial weights from LLM
             temperature: LLM temperature used to generate weights
             prior_update_rate: Rate for adaptive prior updates (λ in feedback)
+            ema_decay: Decay factor for EMA-based prior smoothing
         """
         self.agent_id = agent_id
         self.feature_names = feature_names
         self.temperature = temperature
         self.prior_update_rate = prior_update_rate
+        self.ema_decay = ema_decay
         self.d = len(feature_names)
         
         # Store original weights for reference
@@ -52,9 +55,10 @@ class PriorAgent:
         )
         self._weights = np.clip(self._weights, 1e-6, None)
         
-        # Track feature usage for redundancy calculation
+        # Track feature usage and effectiveness
         self.feature_usage_counts = np.zeros(self.d, dtype=int)
-        self.feature_in_good_trees = np.zeros(self.d, dtype=int)  # Features in high-accuracy trees
+        self.feature_reward_sum = np.zeros(self.d, dtype=float)  # Sum of rewards when feature used
+        self.feature_hardness_sum = np.zeros(self.d, dtype=float)  # Sum of hardness when feature used
         
         # Statistics
         self.n_trees_generated = 0
@@ -107,22 +111,74 @@ class PriorAgent:
         """
         return self._weights >= threshold
     
-    def update_stats(self, reward: float, used_features: Optional[list[int]] = None):
+    def update_stats(
+        self,
+        reward: float,
+        used_features: Optional[list[int]] = None,
+        hardness: Optional[float] = None,
+    ):
         """
         Update agent statistics after generating a tree.
         
         Args:
-            reward: Validation accuracy (normalized)
+            reward: Validation accuracy/improvement (normalized)
             used_features: Feature indices actually used in the tree
+            hardness: Mean hardness of OOB samples (optional)
         """
         self.n_trees_generated += 1
         self.total_reward += reward
         self.reward_history.append(reward)
         
-        # Track which features appear in good trees
-        if used_features is not None and reward > 0.6:  # Above median threshold
+        # Track feature effectiveness
+        if used_features is not None:
             for idx in used_features:
-                self.feature_in_good_trees[idx] += 1
+                if 0 <= idx < self.d:
+                    self.feature_reward_sum[idx] += reward
+                    if hardness is not None:
+                        self.feature_hardness_sum[idx] += hardness
+    
+    def update_prior_with_hardness(
+        self,
+        used_features: list[int],
+        reward: float,
+        hardness_weights: Optional[np.ndarray] = None,
+    ) -> None:
+        """
+        Update prior weights based on feature usage weighted by hardness.
+        
+        Features that helped with hard samples get weight boost.
+        
+        Args:
+            used_features: Feature indices used in the tree
+            reward: Tree's reward (log-loss improvement)
+            hardness_weights: Optional per-feature hardness weights
+        """
+        if len(used_features) == 0:
+            return
+        
+        # Compute update delta
+        delta = np.zeros(self.d, dtype=float)
+        
+        for idx in used_features:
+            if 0 <= idx < self.d:
+                # Base update proportional to reward
+                base_update = self.prior_update_rate * reward
+                
+                # Scale by hardness if available
+                if hardness_weights is not None and idx < len(hardness_weights):
+                    base_update *= (1 + hardness_weights[idx])
+                
+                delta[idx] += base_update
+        
+        # Apply EMA update: w_new = decay * w_old + (1 - decay) * (w_old + delta)
+        # Simplified: w_new = w_old + (1 - decay) * delta
+        self._weights = self._weights + (1 - self.ema_decay) * delta
+        
+        # Ensure valid range
+        self._weights = np.clip(self._weights, 0.05, 2.0)
+        
+        # Renormalize to maintain scale
+        self._weights = self._weights / self._weights.max()
     
     def update_prior_with_redundancy(
         self,
@@ -163,6 +219,11 @@ class PriorAgent:
             dtype=float
         )
         self._weights = np.clip(self._weights, 1e-6, None)
+        
+        # Reset tracking
+        self.feature_usage_counts = np.zeros(self.d, dtype=int)
+        self.feature_reward_sum = np.zeros(self.d, dtype=float)
+        self.feature_hardness_sum = np.zeros(self.d, dtype=float)
     
     @property
     def mean_reward(self) -> float:
@@ -175,16 +236,23 @@ class PriorAgent:
         if len(self.reward_history) < 2:
             return 0.0
         return float(np.std(self.reward_history))
+    
+    @property
+    def feature_effectiveness(self) -> np.ndarray:
+        """Return mean reward per feature (effectiveness score)."""
+        with np.errstate(divide='ignore', invalid='ignore'):
+            effectiveness = self.feature_reward_sum / np.maximum(self.feature_usage_counts, 1)
+        return effectiveness
 
 
 class MultiAgentPriorFactory:
     """
     Factory that manages multiple prior agents with diversity-aware updates.
     
-    Key improvements:
-    1. Tracks global feature usage for redundancy feedback
-    2. Periodically updates agent priors to promote diversity
-    3. Supports RF-style feature masking
+    v6 improvements:
+    1. Hardness-weighted prior updates
+    2. Better diversity feedback mechanism
+    3. EMA-based smoothing for stability
     """
     
     SYSTEM_PROMPTS = [
@@ -233,6 +301,7 @@ class MultiAgentPriorFactory:
         n_trials: int = 3,
         prior_update_rate: float = 0.15,
         update_interval: int = 10,
+        ema_decay: float = 0.95,
     ):
         """
         Args:
@@ -243,6 +312,7 @@ class MultiAgentPriorFactory:
             n_trials: Number of retries for LLM calls
             prior_update_rate: Rate for diversity-based prior updates
             update_interval: How often to update priors (every N trees)
+            ema_decay: EMA decay factor for prior smoothing
         """
         self.dataset = dataset
         self.model = model
@@ -251,6 +321,7 @@ class MultiAgentPriorFactory:
         self.n_trials = n_trials
         self.prior_update_rate = prior_update_rate
         self.update_interval = update_interval
+        self.ema_decay = ema_decay
         
         self.feature_names = dataset.all_feats
         self.d = len(self.feature_names)
@@ -258,6 +329,7 @@ class MultiAgentPriorFactory:
         
         # Global tracking for diversity
         self.global_feature_counts = np.zeros(self.d, dtype=int)
+        self.global_feature_reward_sum = np.zeros(self.d, dtype=float)
         self.total_good_trees = 0
         self.trees_since_update = 0
         
@@ -349,6 +421,7 @@ class MultiAgentPriorFactory:
                 weights=weights,
                 temperature=temperature,
                 prior_update_rate=self.prior_update_rate,
+                ema_decay=self.ema_decay,
             )
             self.agents.append(agent)
             
@@ -374,23 +447,28 @@ class MultiAgentPriorFactory:
         reward: float,
         used_features: list[int],
         is_good_tree: bool = False,
+        hardness: Optional[float] = None,
     ) -> None:
         """
         Record results from a generated tree and potentially update priors.
         
         Args:
             agent_id: Which agent generated the tree
-            reward: Validation accuracy
+            reward: Validation accuracy/improvement
             used_features: Feature indices used in the tree
-            is_good_tree: Whether this tree is considered "good" (high accuracy)
+            is_good_tree: Whether this tree is considered "good"
+            hardness: Mean hardness of samples (optional)
         """
         agent = self.agents[agent_id]
-        agent.update_stats(reward, used_features)
+        agent.update_stats(reward, used_features, hardness)
         
-        # Update global feature counts for good trees
-        if is_good_tree:
-            for idx in used_features:
+        # Update global feature counts
+        for idx in used_features:
+            if 0 <= idx < self.d:
                 self.global_feature_counts[idx] += 1
+                self.global_feature_reward_sum[idx] += reward
+        
+        if is_good_tree:
             self.total_good_trees += 1
         
         self.trees_since_update += 1
@@ -404,8 +482,6 @@ class MultiAgentPriorFactory:
         """Update all agent priors based on global redundancy."""
         if self.total_good_trees == 0:
             return
-        
-        # print(f"  Updating priors (global good trees: {self.total_good_trees})...")
         
         for agent in self.agents:
             agent.update_prior_with_redundancy(
@@ -435,7 +511,6 @@ class MultiAgentPriorFactory:
         probs = agent.prior_probs
         
         # Include top features by probability
-        # At minimum, include min_features
         n_include = max(min_features, int(self.d * 0.5))
         
         # Get indices of top features
@@ -453,6 +528,7 @@ class MultiAgentPriorFactory:
         
         # Reset global tracking
         self.global_feature_counts = np.zeros(self.d, dtype=int)
+        self.global_feature_reward_sum = np.zeros(self.d, dtype=float)
         self.total_good_trees = 0
         self.trees_since_update = 0
     

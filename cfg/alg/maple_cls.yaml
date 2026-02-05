@@ -1,10 +1,11 @@
 _target_: src.ours.maple_cls.MAPLEClassifier
 
 # Fixed MAPLE parameters (not searched)
-n_agents: 5
+n_agents: 3
 exploration_coef: 0.5
 bandit_type: ucb
 use_rf_style: true
+use_calibration: false # Set to true for Platt scaling calibration
 
 # Searchable parameters in param_grid
 param_grid:
@@ -14,7 +15,11 @@ param_grid:
 
   # MAPLE-specific parameters to search
   feature_subset_ratio: [0.5, 0.7, 0.9]
-  diversity_weight: [0.1, 0.2]
-  val_bandit_ratio: [0.25, 0.5]
+  diversity_weight: [0.1, 0.2, 0.3]
   ema_alpha: [0.15, 0.25]
   prior_update_rate: [0.1, 0.2]
+
+  # v6 parameters (OOB-based bagging)
+  prior_temperature: [1.0] # Higher = more exploration in feature sampling
+  uniform_mix_ratio: [0.0] # Mix prior with uniform for exploration
+  weight_uniform_mix: [0.0] # Mix tree weights with uniform to avoid collapse
