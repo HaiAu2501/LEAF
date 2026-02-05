@@ -20,6 +20,6 @@ param_grid:
   prior_update_rate: [0.1, 0.2]
 
   # v6 parameters (OOB-based bagging)
-  prior_temperature: [1.0] # Higher = more exploration in feature sampling
+  prior_temperature: [1.0, 2.0, 3.0] # Higher = more exploration in feature sampling
   uniform_mix_ratio: [0.0] # Mix prior with uniform for exploration
   weight_uniform_mix: [0.0] # Mix tree weights with uniform to avoid collapse
