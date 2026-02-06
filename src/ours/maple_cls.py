@@ -339,7 +339,7 @@ class MAPLEClassifier(Algorithm):
         
         print(f"Grid searching over {len(maple_combos)} MAPLE param combinations...")
         
-        for i, maple_params in enumerate(tqdm(maple_combos)):
+        for i, maple_params in enumerate(maple_combos):
             self.prior_factory.reset_all_priors()
             
             # Fit and get OOB score - use SAME seed for fair comparison

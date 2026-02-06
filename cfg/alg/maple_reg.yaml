@@ -4,7 +4,7 @@ _target_: src.ours.maple_reg.MAPLERegressor
 n_agents: 3
 exploration_coef: 0.5
 bandit_type: ucb
-use_rf_style: false
+use_rf_style: true
 
 # Searchable parameters in param_grid
 param_grid:
