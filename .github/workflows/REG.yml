@@ -20,7 +20,7 @@ jobs:
     strategy:
       matrix:
         dataset:
-          - cholesterol
+          - cpu_activity
           - wine
           - wage
           - abalone
