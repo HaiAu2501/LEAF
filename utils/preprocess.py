@@ -20,7 +20,7 @@ DATASET_IDS = {
     "vehicle": [994, "classification"],
 
     # Regression
-    "cholesterol": [204, "regression"],
+    "cpu_activity": [44978, "regression"],
     "wine": [287, "regression"],
     "wage": [534, "regression"],
     "abalone": [44956, "regression"],
