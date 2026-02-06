@@ -165,29 +165,39 @@ class MAPLERegressor(Algorithm):
         
         return boot_indices, oob_indices
     
-    def _compute_clipped_r2(
+    def _compute_normalized_r2(
         self,
         y_true: np.ndarray,
         y_pred: np.ndarray,
+        global_var: float,
     ) -> float:
         """
-        Compute R² score clipped to [0, 1].
+        Compute R²-like score normalized by GLOBAL variance.
         
-        R² can be negative for very bad predictions, so we clip to ensure
-        valid reward signal for bandit.
+        reward = 1 - MSE / var_global
+        
+        This is more stable than standard R² because:
+        1. Standard R² uses local variance of y_true, which varies per OOB subset
+        2. Trees with low-variance OOB subsets get extremely noisy R² scores
+        3. Using global variance makes rewards comparable across trees
         
         Args:
-            y_true: True target values
+            y_true: True target values (OOB subset)
             y_pred: Predicted values
+            global_var: Variance of full training set (constant across trees)
             
         Returns:
-            Clipped R² in [0, 1]
+            Normalized R² in [0, 1]
         """
         if len(y_true) < 2:
             return 0.0
         
-        r2 = r2_score(y_true, y_pred)
-        return float(np.clip(r2, 0.0, 1.0))
+        mse = np.mean((y_true - y_pred) ** 2)
+        
+        # R²-like but with global variance (stable denominator)
+        r2_normalized = 1.0 - mse / global_var
+        
+        return float(np.clip(r2_normalized, 0.0, 1.0))
     
     def _compute_hardness(
         self,
@@ -246,17 +256,26 @@ class MAPLERegressor(Algorithm):
         
         return indices.tolist()
     
-    def _compute_correlation_diversity(
+    def _compute_residual_diversity(
         self,
         predictions: list[np.ndarray],
+        y_true: np.ndarray,
         buffer_size: int = 20,
     ) -> np.ndarray:
         """
-        Compute correlation-based diversity scores.
+        Compute residual-based diversity scores (error diversity).
         
-        div(i) = 1 - mean(|corr(pred_i, pred_j)|) for j != i
+        e_i = y - pred_i (residuals)
+        div(i) = 1 - mean(|corr(e_i, e_j)|) for j != i
         
-        Returns diversity score for each tree (lower correlation = higher diversity).
+        This encourages trees that make DIFFERENT errors, which is the true
+        goal of ensemble diversity. Trees with uncorrelated errors will
+        cancel out when averaged.
+        
+        Note: Measuring diversity on predictions would penalize good trees
+        that all track the true signal (high pred correlation ≠ bad).
+        
+        Returns diversity score for each tree (lower error correlation = higher diversity).
         """
         n_trees = len(predictions)
         if n_trees <= 1:
@@ -268,25 +287,27 @@ class MAPLERegressor(Algorithm):
         diversity_scores = np.zeros(n_trees)
         
         for i in range(n_trees):
-            correlations = []
+            error_correlations = []
             
             # Compare with trees in buffer
             for j in range(start_idx, n_trees):
                 if i != j:
-                    # Find common samples (both have predictions)
+                    # Find common OOB samples (both have predictions)
                     mask = ~(np.isnan(predictions[i]) | np.isnan(predictions[j]))
                     if mask.sum() > 2:  # Need at least 3 points for meaningful correlation
-                        pred_i = predictions[i][mask]
-                        pred_j = predictions[j][mask]
+                        # Compute residuals
+                        e_i = y_true[mask] - predictions[i][mask]
+                        e_j = y_true[mask] - predictions[j][mask]
                         
-                        # Compute Pearson correlation
-                        if np.std(pred_i) > 1e-8 and np.std(pred_j) > 1e-8:
-                            corr = np.corrcoef(pred_i, pred_j)[0, 1]
-                            correlations.append(np.abs(corr))
+                        # Compute Pearson correlation of residuals
+                        if np.std(e_i) > 1e-8 and np.std(e_j) > 1e-8:
+                            corr = np.corrcoef(e_i, e_j)[0, 1]
+                            error_correlations.append(np.abs(corr))
             
-            if correlations:
-                # Diversity = 1 - mean absolute correlation
-                diversity_scores[i] = 1.0 - np.mean(correlations)
+            if error_correlations:
+                # Diversity = 1 - mean absolute error correlation
+                # High diversity = trees make different mistakes
+                diversity_scores[i] = 1.0 - np.mean(error_correlations)
             else:
                 diversity_scores[i] = 0.5  # Neutral diversity
         
@@ -335,7 +356,7 @@ class MAPLERegressor(Algorithm):
         
         print(f"Grid searching over {len(maple_combos)} MAPLE param combinations...")
         
-        for i, maple_params in enumerate(maple_combos):
+        for i, maple_params in enumerate(tqdm(maple_combos)):
             self.prior_factory.reset_all_priors()
             
             # Fit and get OOB score
@@ -405,6 +426,10 @@ class MAPLERegressor(Algorithm):
         d = len(feature_names)
         N = len(X_train)
         
+        # Global variance for normalized R² (stable across OOB subsets)
+        # Since y is standardized, this should be ~1, but compute for safety
+        global_var = np.var(y_train) + 1e-12
+        
         # Get MAPLE params
         feature_subset_ratio = self._get_maple_param(maple_params, 'feature_subset_ratio')
         diversity_weight = self._get_maple_param(maple_params, 'diversity_weight')
@@ -429,7 +454,7 @@ class MAPLERegressor(Algorithm):
         m_prior = max(1, int(d * feature_subset_ratio))
         
         # RF-style max_features at node level
-        max_features_node = max(1, int(m_prior / 3)) if self.use_rf_style else None
+        max_features_node = max(1, int(np.sqrt(m_prior))) if self.use_rf_style else None
         
         # Initialize bandit
         if self.bandit_type == "ts":
@@ -503,13 +528,13 @@ class MAPLERegressor(Algorithm):
                     self.oob_predictions[idx_global, t] = oob_pred[idx_local]
                     self.oob_counts[idx_global, t] = 1
                 
-                # Compute clipped R² as reward
-                reward = self._compute_clipped_r2(y_oob, oob_pred)
+                # Compute normalized R² as reward (uses global variance for stability)
+                reward = self._compute_normalized_r2(y_oob, oob_pred, global_var)
                 
                 # Compute hardness (normalized residuals)
                 hardness = self._compute_hardness(y_oob, oob_pred)
                 
-                # Store R² for tree weighting
+                # Store normalized R² for tree weighting (same metric as bandit)
                 oob_r2_scores.append(reward)
                 
                 # Predictions for diversity (NaN for non-OOB samples)
@@ -557,17 +582,18 @@ class MAPLERegressor(Algorithm):
                     hardness=mean_hardness,
                 )
         
-        # Compute tree weights based on OOB R² and diversity
+        # Compute tree weights based on OOB normalized-R² and error diversity
+        # Note: Using same metric (normalized R²) for both bandit and quality ensures consistency
         oob_r2_scores = np.array(oob_r2_scores)
         
-        # Diversity scores (correlation-based)
-        diversity_scores = self._compute_correlation_diversity(oob_predictions_list)
+        # Diversity scores (residual-based - measures error diversity)
+        diversity_scores = self._compute_residual_diversity(oob_predictions_list, y_train)
         
         # Normalize scores
         r2_range = oob_r2_scores.max() - oob_r2_scores.min()
         div_range = diversity_scores.max() - diversity_scores.min()
         
-        # Higher R² = better (already in [0, 1])
+        # Higher normalized R² = better (already in [0, 1] with stable scale)
         if r2_range > 1e-8:
             quality_score = (oob_r2_scores - oob_r2_scores.min()) / r2_range
         else:
