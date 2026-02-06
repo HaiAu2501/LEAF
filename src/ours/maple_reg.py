@@ -429,7 +429,7 @@ class MAPLERegressor(Algorithm):
         m_prior = max(1, int(d * feature_subset_ratio))
         
         # RF-style max_features at node level
-        max_features_node = max(1, int(np.sqrt(m_prior))) if self.use_rf_style else None
+        max_features_node = max(1, int(m_prior / 3)) if self.use_rf_style else None
         
         # Initialize bandit
         if self.bandit_type == "ts":

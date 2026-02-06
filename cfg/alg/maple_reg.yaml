@@ -1,7 +1,7 @@
 _target_: src.ours.maple_reg.MAPLERegressor
 
 # Fixed MAPLE parameters (not searched)
-n_agents: 1
+n_agents: 3
 exploration_coef: 0.5
 bandit_type: ucb
 use_rf_style: true
@@ -19,6 +19,6 @@ param_grid:
   prior_update_rate: [0.1, 0.2]
 
   # v6 parameters (OOB-based bagging)
-  prior_temperature: [1.0, 2.0, 3.0]
-  uniform_mix_ratio: [0.0]
-  weight_uniform_mix: [0.0]
+  prior_temperature: [1.0]
+  uniform_mix_ratio: [0.1, 0.2]
+  weight_uniform_mix: [0.05, 0.1]
