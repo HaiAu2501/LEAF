@@ -20,6 +20,14 @@ jobs:
     strategy:
       matrix:
         dataset:
+          - abalone
+          - Bike_Sharing_Demand
+          - Brazilian_houses
+          - cars
+          - cpu_activity
+          - house_sales
+          - Moneyball
+          - naval_propulsion_plant
           # - cpu_activity
           # - wine
           # - wage
@@ -30,11 +38,11 @@ jobs:
           # - house_sales
           # - Bike_Sharing_Demand
           # - Brazilian_houses
-          - Moneyball
-          - naval_propulsion_plant
-          - pumadyn32nh
-          - fifa
-          - cps88wages
+          # - Moneyball
+          # - naval_propulsion_plant
+          # - pumadyn32nh
+          # - fifa
+          # - cps88wages
       fail-fast: false
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
