@@ -18,8 +18,8 @@ evaluator:
 
 alg:
   param_grid:
-    n_estimators: [50] # fixed for fair comparison
-    max_depth: [3] # fixed for fair comparison
+    n_estimators: [100] # fixed for fair comparison
+    max_depth: [4] # fixed for fair comparison
 
 paths:
   project_root: .
