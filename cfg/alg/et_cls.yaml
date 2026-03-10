@@ -1,0 +1,5 @@
+_target_: src.baselines.et_cls.CustomExtraTreesClassifier
+
+param_grid:
+  min_samples_split: ${range:2, 17}
+  min_samples_leaf: ${range:1, 17}

@@ -1,0 +1,5 @@
+_target_: src.baselines.rf_reg.CustomRFRegressor
+
+param_grid:
+  min_samples_split: ${range:2, 17}
+  min_samples_leaf: ${range:1, 17}
