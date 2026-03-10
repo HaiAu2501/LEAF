@@ -61,6 +61,9 @@ python main.py \
        evaluator.model=gpt-5-mini
 ```
 
+> [!NOTE]
+> **Reproducibility:** Results are partially reproducible due to the non-deterministic nature of LLMs — outputs may vary across runs. Additionally, the quality of dataset metadata (column names, label names, task descriptions, domain descriptions, etc.) significantly affects the quality of the LLM's prior and, consequently, the overall performance.
+
 ---
 
 ## 📝 Citation
